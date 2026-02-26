@@ -79,6 +79,31 @@ CREATE TABLE IF NOT EXISTS ai_results (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- AI Insights Cache (pre-generated, served to app without calling AI directly)
+CREATE TABLE IF NOT EXISTS ai_insights (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
+  type VARCHAR(50) NOT NULL CHECK (type IN ('forecast','inventory','festival')),
+  data JSONB NOT NULL,
+  generated_at TIMESTAMP DEFAULT NOW(),
+  ledger_count_at_generation INTEGER DEFAULT 0,
+  UNIQUE(store_id, type)
+);
+
+-- Stock Items (shopkeeper's current inventory)
+CREATE TABLE IF NOT EXISTS stock_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  product_name VARCHAR(255) NOT NULL,
+  quantity DECIMAL(10,2) NOT NULL DEFAULT 0,
+  unit VARCHAR(50) DEFAULT 'units',
+  cost_price DECIMAL(10,2),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(store_id, product_name)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_ledger_user_date ON ledger_entries(user_id, transaction_date);
 CREATE INDEX IF NOT EXISTS idx_line_items_product ON line_items(product_name);
@@ -86,3 +111,5 @@ CREATE INDEX IF NOT EXISTS idx_bills_user_status ON bills(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_ai_jobs_user ON ai_jobs(user_id);
 CREATE INDEX IF NOT EXISTS idx_stores_user ON stores(user_id);
+CREATE INDEX IF NOT EXISTS idx_ai_insights_store_type ON ai_insights(store_id, type);
+CREATE INDEX IF NOT EXISTS idx_stock_items_store ON stock_items(store_id);

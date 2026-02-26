@@ -26,7 +26,14 @@ async function login({ name, password }) {
 
     const token = jwt.sign({ userId: user.id, name: user.name }, env.jwtSecret, { expiresIn: env.jwtExpiresIn });
     const refreshToken = jwt.sign({ userId: user.id }, env.jwtSecret, { expiresIn: env.refreshExpiresIn });
-    return { token, refreshToken, user: { id: user.id, name: user.name } };
+
+    // Return the user's first store so the app can restore storeId on login
+    const { rows: stores } = await pool.query(
+        'SELECT id, name, type FROM stores WHERE user_id=$1 ORDER BY created_at ASC LIMIT 1',
+        [user.id]
+    );
+    const store = stores[0] || null;
+    return { token, refreshToken, user: { id: user.id, name: user.name }, store };
 }
 
 async function refresh({ refreshToken }) {

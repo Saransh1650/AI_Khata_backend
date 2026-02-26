@@ -25,6 +25,7 @@ app.use('/bills', require('./bills/routes'));
 app.use('/ledger', require('./ledger/routes'));
 app.use('/analytics', require('./analytics/routes'));
 app.use('/ai', require('./ai/routes'));
+app.use('/stocks', require('./stocks/routes'));
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date() }));
@@ -37,4 +38,6 @@ app.use((err, _req, res, _next) => {
 
 app.listen(env.port, () => {
     console.log(`🚀 AI Khata backend running on port ${env.port}`);
+    // Start the AI insights background scheduler (generates & caches Gemini responses)
+    require('./ai/service').startInsightsScheduler();
 });

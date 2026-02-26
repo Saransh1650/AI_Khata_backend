@@ -2,15 +2,24 @@
 const path = require('path');
 const { Worker } = require('worker_threads');
 const pool = require('../config/database');
-const { callGemini } = require('../config/gemini');
 const { getUpcomingFestivals, getLastYearWindow } = require('./festivalCalendar');
 
-// ── Festival recs cache (in-memory, 24-hour TTL per storeType) ────────────────
-const FESTIVAL_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const festivalCache = new Map(); // key: storeType → { data, expiresAt }
-const festivalInFlight = new Map(); // key: storeType → Promise (dedup concurrent calls)
+// ── Constants ─────────────────────────────────────────────────────────────────
+const INSIGHT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const LEDGER_ENTRY_THRESHOLD = 20;            // trigger refresh after 20 new entries
 
-// ── Job helpers ───────────────────────────────────────────────────────────────
+// Track in-flight refreshes per store to prevent duplicates
+const refreshInFlight = new Set();
+
+// ── Worker dispatch ────────────────────────────────────────────────────────────
+
+function dispatchWorker(workerFile, workerData) {
+    const worker = new Worker(path.join(__dirname, '../workers', workerFile), { workerData });
+    worker.on('error', (e) => console.error(`[AI] Worker ${workerFile} error:`, e));
+    return worker;
+}
+
+// ── OCR job helpers (kept for bills flow) ─────────────────────────────────────
 
 async function createJob(userId, storeId, jobType, config) {
     const { rows: [job] } = await pool.query(
@@ -36,114 +45,138 @@ async function getJobResult(jobId, userId) {
     return { job, result: rows[0] || null };
 }
 
-// ── Dispatch workers ──────────────────────────────────────────────────────────
+// ── AI Insights Cache ─────────────────────────────────────────────────────────
 
-function dispatchWorker(workerFile, workerData) {
-    const worker = new Worker(path.join(__dirname, '../workers', workerFile), { workerData });
-    worker.on('error', (e) => console.error(`Worker ${workerFile} error:`, e));
-}
+/**
+ * Returns cached insights from ai_insights table for a store.
+ * Returns an object: { forecast, inventory, festival, generatedAt }
+ */
+async function getInsights(userId, storeId) {
+    const { rows } = await pool.query(
+        `SELECT type, data, generated_at FROM ai_insights
+         WHERE store_id=$1
+         ORDER BY generated_at DESC`,
+        [storeId]
+    );
 
-// ── Forecast ──────────────────────────────────────────────────────────────────
+    const result = {
+        forecast: null,
+        inventory: null,
+        festival: [],
+        generatedAt: null,
+    };
 
-async function requestForecast(userId, storeId, { horizon = 30, storeType } = {}) {
-    const job = await createJob(userId, storeId, 'forecast', { horizon, storeType });
-    dispatchWorker('forecastWorker.js', { jobId: job.id, userId, storeId, horizon, storeType });
-    return job;
-}
-
-// ── Inventory analysis ────────────────────────────────────────────────────────
-
-async function requestInventoryAnalysis(userId, storeId, { storeType } = {}) {
-    const job = await createJob(userId, storeId, 'inventory', { storeType });
-    dispatchWorker('inventoryWorker.js', { jobId: job.id, userId, storeId, storeType });
-    return job;
-}
-
-// ── Festival recommendations (synchronous — fast) ─────────────────────────────
-
-async function _fetchFestivalRecommendations(userId, storeId, storeType) {
-    const festivals = getUpcomingFestivals(30, storeType);
-    if (!festivals.length) return [];
-
-    const results = [];
-
-    for (const festival of festivals) {
-        const { start, end } = getLastYearWindow(festival);
-
-        // Fetch last year's sales for this festival window
-        const { rows: lastYearSales } = await pool.query(
-            `SELECT li.product_name, SUM(li.quantity) AS qty, SUM(li.total_price) AS revenue
-       FROM line_items li
-       JOIN ledger_entries le ON le.id = li.ledger_entry_id
-       WHERE le.user_id=$1
-         AND ($2::uuid IS NULL OR le.store_id=$2)
-         AND le.transaction_date BETWEEN $3 AND $4
-       GROUP BY li.product_name
-       ORDER BY qty DESC LIMIT 20`,
-            [userId, storeId, start, end]
-        );
-
-        // Fetch 30-day rolling baseline
-        const { rows: baseline } = await pool.query(
-            `SELECT li.product_name, SUM(li.quantity) AS qty
-       FROM line_items li
-       JOIN ledger_entries le ON le.id = li.ledger_entry_id
-       WHERE le.user_id=$1
-         AND ($2::uuid IS NULL OR le.store_id=$2)
-         AND le.transaction_date >= NOW() - INTERVAL '30 days'
-       GROUP BY li.product_name`,
-            [userId, storeId]
-        );
-
-        const prompt = lastYearSales.length > 0
-            ? `You are a retail advisor for a ${storeType} store. During last year's ${festival.name} festival (${festival.windowDays}-day window), these products sold: ${JSON.stringify(lastYearSales)}. The 30-day baseline sales are: ${JSON.stringify(baseline)}. Recommend stock levels for the upcoming ${festival.name}. Return a JSON array: [{"product":"name","baselineQty":0,"recommendedQty":0,"percentIncrease":0,"reason":"..."}]. Only include products relevant to a ${storeType} store. Keep array concise (top 8 items max.).`
-            : `You are a retail advisor for a ${storeType} store. The upcoming festival is ${festival.name} in ${Math.ceil((festival.date - new Date()) / 86400000)} days. Recommend which products a ${storeType} store should stock up on. Return a JSON array: [{"product":"name","baselineQty":0,"recommendedQty":0,"percentIncrease":0,"reason":"..."}]. Top 8 items max.`;
-
-        try {
-            const recommendations = await callGemini(prompt);
-            results.push({
-                festival: festival.name,
-                date: festival.date,
-                daysAway: Math.ceil((festival.date - new Date()) / 86400000),
-                recommendations: Array.isArray(recommendations) ? recommendations : [],
-            });
-        } catch (e) {
-            console.error(`Gemini festival recs error for ${festival.name}:`, e.message);
+    for (const row of rows) {
+        result[row.type] = row.data;
+        // Use the oldest generatedAt to show the "least fresh" time
+        if (!result.generatedAt || row.generated_at < result.generatedAt) {
+            result.generatedAt = row.generated_at;
         }
     }
 
-    return results;
+    return result;
 }
 
-async function getFestivalRecommendations(userId, storeId, storeType) {
-    const cacheKey = storeType || 'generic';
-
-    // 1. Return cached result if still fresh
-    const cached = festivalCache.get(cacheKey);
-    if (cached && Date.now() < cached.expiresAt) {
-        return cached.data;
+/**
+ * Dispatches the refreshInsights worker for a store.
+ * Skips if a refresh is already running for this store.
+ */
+function triggerInsightsRefresh(userId, storeId, storeType) {
+    if (refreshInFlight.has(storeId)) {
+        console.log(`[AI] Refresh already in progress for store ${storeId}, skipping`);
+        return;
     }
-
-    // 2. If a fetch is already in-flight for this storeType, share its promise
-    //    (prevents N concurrent requests from each firing N Gemini calls)
-    if (festivalInFlight.has(cacheKey)) {
-        return festivalInFlight.get(cacheKey);
-    }
-
-    // 3. Start the fetch, register it as in-flight
-    const promise = _fetchFestivalRecommendations(userId, storeId, storeType)
-        .then((data) => {
-            festivalCache.set(cacheKey, { data, expiresAt: Date.now() + FESTIVAL_CACHE_TTL_MS });
-            festivalInFlight.delete(cacheKey);
-            return data;
-        })
-        .catch((err) => {
-            festivalInFlight.delete(cacheKey);
-            throw err;
-        });
-
-    festivalInFlight.set(cacheKey, promise);
-    return promise;
+    refreshInFlight.add(storeId);
+    const worker = dispatchWorker('refreshInsights.js', {
+        userId,
+        storeId,
+        storeType: storeType || 'general',
+    });
+    worker.on('message', () => refreshInFlight.delete(storeId));
+    worker.on('error', () => refreshInFlight.delete(storeId));
+    worker.on('exit', () => refreshInFlight.delete(storeId));
+    console.log(`[AI] Refresh triggered for store ${storeId}`);
 }
 
-module.exports = { requestForecast, requestInventoryAnalysis, getFestivalRecommendations, getJob, getJobResult };
+/**
+ * Checks whether insights need refreshing (older than 24h or 20+ new ledger entries)
+ * and triggers a background refresh if so.
+ */
+async function checkAndRefreshIfNeeded(userId, storeId, storeType) {
+    try {
+        // Get existing insights meta
+        const { rows } = await pool.query(
+            `SELECT type, generated_at, ledger_count_at_generation
+             FROM ai_insights WHERE store_id=$1`,
+            [storeId]
+        );
+
+        // If no insights at all — trigger immediately
+        if (!rows.length) {
+            triggerInsightsRefresh(userId, storeId, storeType);
+            return;
+        }
+
+        // Check TTL (using the oldest generated_at)
+        const oldest = rows.reduce((a, b) => a.generated_at < b.generated_at ? a : b);
+        const ageMs = Date.now() - new Date(oldest.generated_at).getTime();
+        if (ageMs > INSIGHT_TTL_MS) {
+            console.log(`[AI] Insights for store ${storeId} are stale (${Math.round(ageMs / 3600000)}h old). Refreshing.`);
+            triggerInsightsRefresh(userId, storeId, storeType);
+            return;
+        }
+
+        // Check if 20+ new ledger entries since last generation
+        const ledgerCountAtGen = oldest.ledger_count_at_generation || 0;
+        const { rows: [{ count }] } = await pool.query(
+            'SELECT COUNT(*)::int AS count FROM ledger_entries WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)',
+            [userId, storeId]
+        );
+        const currentCount = count || 0;
+        if (currentCount - ledgerCountAtGen >= LEDGER_ENTRY_THRESHOLD) {
+            console.log(`[AI] ${currentCount - ledgerCountAtGen} new ledger entries since last generation. Refreshing.`);
+            triggerInsightsRefresh(userId, storeId, storeType);
+        }
+    } catch (e) {
+        console.error('[AI] checkAndRefreshIfNeeded error:', e.message);
+    }
+}
+
+/**
+ * Scheduler: refresh insights for all active stores periodically.
+ * Called once at server startup.
+ */
+async function startInsightsScheduler() {
+    const doRefresh = async () => {
+        try {
+            // Get all stores with at least 1 ledger entry (active stores)
+            const { rows: activeStores } = await pool.query(
+                `SELECT DISTINCT s.id AS store_id, s.user_id, s.type AS store_type
+                 FROM stores s
+                 JOIN ledger_entries le ON le.store_id = s.id
+                 LIMIT 50`
+            );
+            console.log(`[AI Scheduler] Refreshing insights for ${activeStores.length} active store(s)`);
+            for (const store of activeStores) {
+                triggerInsightsRefresh(store.user_id, store.store_id, store.store_type);
+                // Stagger workers by 10s to avoid simultaneous Gemini calls
+                await new Promise(r => setTimeout(r, 10_000));
+            }
+        } catch (e) {
+            console.error('[AI Scheduler] Error:', e.message);
+        }
+    };
+
+    // Run once at startup (delayed by 30s to let DB settle)
+    setTimeout(doRefresh, 30_000);
+    // Then every 24 hours
+    setInterval(doRefresh, INSIGHT_TTL_MS);
+    console.log('[AI Scheduler] Started — insights will auto-refresh every 24h');
+}
+
+module.exports = {
+    // OCR/bills jobs
+    createJob, getJob, getJobResult,
+    // Insights cache
+    getInsights, triggerInsightsRefresh, checkAndRefreshIfNeeded, startInsightsScheduler,
+};
