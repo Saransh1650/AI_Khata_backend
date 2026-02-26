@@ -5,6 +5,11 @@ const pool = require('../config/database');
 const { callGemini } = require('../config/gemini');
 const { getUpcomingFestivals, getLastYearWindow } = require('./festivalCalendar');
 
+// ── Festival recs cache (in-memory, 24-hour TTL per storeType) ────────────────
+const FESTIVAL_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const festivalCache = new Map(); // key: storeType → { data, expiresAt }
+const festivalInFlight = new Map(); // key: storeType → Promise (dedup concurrent calls)
+
 // ── Job helpers ───────────────────────────────────────────────────────────────
 
 async function createJob(userId, storeId, jobType, config) {
@@ -56,7 +61,7 @@ async function requestInventoryAnalysis(userId, storeId, { storeType } = {}) {
 
 // ── Festival recommendations (synchronous — fast) ─────────────────────────────
 
-async function getFestivalRecommendations(userId, storeId, storeType) {
+async function _fetchFestivalRecommendations(userId, storeId, storeType) {
     const festivals = getUpcomingFestivals(30, storeType);
     if (!festivals.length) return [];
 
@@ -90,11 +95,8 @@ async function getFestivalRecommendations(userId, storeId, storeType) {
             [userId, storeId]
         );
 
-        const baselineMap = Object.fromEntries(baseline.map(b => [b.product_name, Number(b.qty)]));
-
-        // If no historical data, ask Gemini for generic recommendations
         const prompt = lastYearSales.length > 0
-            ? `You are a retail advisor for a ${storeType} store. During last year's ${festival.name} festival (${festival.windowDays}-day window), these products sold: ${JSON.stringify(lastYearSales)}. The 30-day baseline sales are: ${JSON.stringify(baseline)}. Recommend stock levels for the upcoming ${festival.name}. Return a JSON array: [{"product":"name","baselineQty":0,"recommendedQty":0,"percentIncrease":0,"reason":"..."}]. Only include products relevant to a ${storeType} store. Keep array concise (top 8 items max).`
+            ? `You are a retail advisor for a ${storeType} store. During last year's ${festival.name} festival (${festival.windowDays}-day window), these products sold: ${JSON.stringify(lastYearSales)}. The 30-day baseline sales are: ${JSON.stringify(baseline)}. Recommend stock levels for the upcoming ${festival.name}. Return a JSON array: [{"product":"name","baselineQty":0,"recommendedQty":0,"percentIncrease":0,"reason":"..."}]. Only include products relevant to a ${storeType} store. Keep array concise (top 8 items max.).`
             : `You are a retail advisor for a ${storeType} store. The upcoming festival is ${festival.name} in ${Math.ceil((festival.date - new Date()) / 86400000)} days. Recommend which products a ${storeType} store should stock up on. Return a JSON array: [{"product":"name","baselineQty":0,"recommendedQty":0,"percentIncrease":0,"reason":"..."}]. Top 8 items max.`;
 
         try {
@@ -111,6 +113,37 @@ async function getFestivalRecommendations(userId, storeId, storeType) {
     }
 
     return results;
+}
+
+async function getFestivalRecommendations(userId, storeId, storeType) {
+    const cacheKey = storeType || 'generic';
+
+    // 1. Return cached result if still fresh
+    const cached = festivalCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.data;
+    }
+
+    // 2. If a fetch is already in-flight for this storeType, share its promise
+    //    (prevents N concurrent requests from each firing N Gemini calls)
+    if (festivalInFlight.has(cacheKey)) {
+        return festivalInFlight.get(cacheKey);
+    }
+
+    // 3. Start the fetch, register it as in-flight
+    const promise = _fetchFestivalRecommendations(userId, storeId, storeType)
+        .then((data) => {
+            festivalCache.set(cacheKey, { data, expiresAt: Date.now() + FESTIVAL_CACHE_TTL_MS });
+            festivalInFlight.delete(cacheKey);
+            return data;
+        })
+        .catch((err) => {
+            festivalInFlight.delete(cacheKey);
+            throw err;
+        });
+
+    festivalInFlight.set(cacheKey, promise);
+    return promise;
 }
 
 module.exports = { requestForecast, requestInventoryAnalysis, getFestivalRecommendations, getJob, getJobResult };
