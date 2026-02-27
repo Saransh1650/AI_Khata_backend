@@ -20,7 +20,7 @@ async function uploadBill(userId, storeId, file) {
     return bill;
 }
 
-async function createManualBill(userId, storeId, { merchant, date, total, lineItems }) {
+async function createManualBill(userId, storeId, { merchant, date, total, transactionType = 'income', lineItems }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -33,8 +33,8 @@ async function createManualBill(userId, storeId, { merchant, date, total, lineIt
 
         // Create ledger entry
         const { rows: [entry] } = await client.query(
-            'INSERT INTO ledger_entries(user_id,store_id,bill_id,merchant,transaction_date,total_amount) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-            [userId, storeId, bill.id, merchant, new Date(date), total]
+            'INSERT INTO ledger_entries(user_id,store_id,bill_id,merchant,transaction_date,total_amount,transaction_type) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+            [userId, storeId, bill.id, merchant, new Date(date), total, transactionType]
         );
 
         // Create line items

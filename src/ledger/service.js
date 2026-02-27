@@ -27,13 +27,13 @@ async function getEntry(entryId, userId) {
     return rows[0] || null;
 }
 
-async function createEntry(userId, storeId, { merchant, transaction_date, total_amount, notes, lineItems }) {
+async function createEntry(userId, storeId, { merchant, transaction_date, total_amount, transaction_type = 'income', notes, lineItems }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         const { rows: [entry] } = await client.query(
-            'INSERT INTO ledger_entries(user_id,store_id,merchant,transaction_date,total_amount,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-            [userId, storeId, merchant, transaction_date, total_amount, notes || '']
+            'INSERT INTO ledger_entries(user_id,store_id,merchant,transaction_date,total_amount,transaction_type,notes) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+            [userId, storeId, merchant, transaction_date, total_amount, transaction_type, notes || '']
         );
         for (const item of (lineItems || [])) {
             await client.query(
@@ -47,11 +47,11 @@ async function createEntry(userId, storeId, { merchant, transaction_date, total_
 }
 
 async function updateEntry(entryId, userId, fields) {
-    const { merchant, transaction_date, total_amount, notes } = fields;
+    const { merchant, transaction_date, total_amount, transaction_type = 'income', notes } = fields;
     const { rows } = await pool.query(
-        `UPDATE ledger_entries SET merchant=$3, transaction_date=$4, total_amount=$5, notes=$6, updated_at=NOW()
+        `UPDATE ledger_entries SET merchant=$3, transaction_date=$4, total_amount=$5, transaction_type=$6, notes=$7, updated_at=NOW()
      WHERE id=$1 AND user_id=$2 RETURNING *`,
-        [entryId, userId, merchant, transaction_date, total_amount, notes]
+        [entryId, userId, merchant, transaction_date, total_amount, transaction_type, notes]
     );
     if (!rows.length) { const e = new Error('Not found'); e.status = 404; throw e; }
     return rows[0];

@@ -8,6 +8,7 @@ const env = {
   jwtExpiresIn: '24h',
   refreshExpiresIn: '7d',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  groqApiKey: process.env.GROQ_API_KEY || '',
   uploadDir: process.env.UPLOAD_DIR || './uploads',
   storageDriver: process.env.STORAGE_DRIVER || 'local',
   allowedOrigins: process.env.ALLOWED_ORIGINS || '*',

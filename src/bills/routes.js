@@ -25,9 +25,9 @@ router.post('/upload', authenticate, upload.single('image'), async (req, res, ne
 // POST /bills/manual — manual entry
 router.post('/manual', authenticate, async (req, res, next) => {
     try {
-        const { storeId, merchant, date, total, lineItems } = req.body;
+        const { storeId, merchant, date, total, transactionType, lineItems } = req.body;
         if (!merchant || !date || !total) return res.status(400).json({ error: 'merchant, date, total required' });
-        const result = await svc.createManualBill(req.user.userId, storeId, { merchant, date, total, lineItems });
+        const result = await svc.createManualBill(req.user.userId, storeId, { merchant, date, total, transactionType: transactionType || 'income', lineItems });
         res.status(201).json(result);
     } catch (e) { next(e); }
 });

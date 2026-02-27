@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   merchant VARCHAR(255),
   transaction_date TIMESTAMP NOT NULL,
   total_amount DECIMAL(10, 2) NOT NULL,
+  transaction_type VARCHAR(20) NOT NULL DEFAULT 'income',
   notes TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
