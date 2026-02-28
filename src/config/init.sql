@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS line_items (
   product_name VARCHAR(255) NOT NULL,
   quantity DECIMAL(10, 2) NOT NULL DEFAULT 1,
   unit_price DECIMAL(10, 2) NOT NULL,
-  total_price DECIMAL(10, 2) NOT NULL
+  total_price DECIMAL(10, 2) NOT NULL,
+  unit VARCHAR(50) DEFAULT 'units'
 );
 
 -- AI Jobs
@@ -128,3 +129,6 @@ CREATE INDEX IF NOT EXISTS idx_ai_jobs_user ON ai_jobs(user_id);
 CREATE INDEX IF NOT EXISTS idx_stores_user ON stores(user_id);
 CREATE INDEX IF NOT EXISTS idx_ai_insights_store_type ON ai_insights(store_id, type);
 CREATE INDEX IF NOT EXISTS idx_stock_items_store ON stock_items(store_id);
+
+-- ── Migrations (safe to re-run on existing databases) ────────────────────────
+ALTER TABLE line_items ADD COLUMN IF NOT EXISTS unit VARCHAR(50) DEFAULT 'units';

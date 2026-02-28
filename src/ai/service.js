@@ -61,7 +61,6 @@ async function getInsights(userId, storeId) {
 
     const result = {
         forecast: null,
-        inventory: null,
         festival: [],
         generatedAt: null,
     };

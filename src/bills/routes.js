@@ -26,8 +26,14 @@ router.post('/upload', authenticate, upload.single('image'), async (req, res, ne
 router.post('/manual', authenticate, async (req, res, next) => {
     try {
         const { storeId, merchant, date, total, transactionType, lineItems } = req.body;
-        if (!merchant || !date || !total) return res.status(400).json({ error: 'merchant, date, total required' });
-        const result = await svc.createManualBill(req.user.userId, storeId, { merchant, date, total, transactionType: transactionType || 'income', lineItems });
+        if (!merchant || !date || total == null) return res.status(400).json({ error: 'merchant, date, total required' });
+        if (!Array.isArray(lineItems) || lineItems.length === 0) {
+            return res.status(400).json({ error: 'at least one line item is required' });
+        }
+        const txType = ['income', 'expense'].includes(transactionType) ? transactionType : 'income';
+        const result = await svc.createManualBill(req.user.userId, storeId, {
+            merchant, date, total, transactionType: txType, lineItems,
+        });
         res.status(201).json(result);
     } catch (e) { next(e); }
 });

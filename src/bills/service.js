@@ -3,6 +3,7 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const pool = require('../config/database');
 const env = require('../config/env');
+const { syncStockAfterBill } = require('../utils/stockSync');
 
 async function uploadBill(userId, storeId, file) {
     const imageUrl = `/uploads/${file.filename}`;
@@ -40,9 +41,14 @@ async function createManualBill(userId, storeId, { merchant, date, total, transa
         // Create line items
         for (const item of (lineItems || [])) {
             await client.query(
-                'INSERT INTO line_items(ledger_entry_id,product_name,quantity,unit_price,total_price) VALUES($1,$2,$3,$4,$5)',
-                [entry.id, item.name, item.qty, item.unitPrice, item.qty * item.unitPrice]
+                'INSERT INTO line_items(ledger_entry_id,product_name,quantity,unit_price,total_price,unit) VALUES($1,$2,$3,$4,$5,$6)',
+                [entry.id, item.name, item.qty, item.unitPrice, item.qty * item.unitPrice, item.unit || 'units']
             );
+        }
+
+        // Sync inventory
+        if (storeId) {
+            await syncStockAfterBill(client, userId, storeId, transactionType, lineItems);
         }
 
         await client.query('COMMIT');
@@ -57,16 +63,48 @@ async function createManualBill(userId, storeId, { merchant, date, total, transa
 
 async function getBills(userId, storeId) {
     const params = [userId];
-    let q = 'SELECT * FROM bills WHERE user_id=$1';
-    if (storeId) { params.push(storeId); q += ` AND store_id=$${params.length}`; }
-    q += ' ORDER BY created_at DESC LIMIT 50';
+    let q = `
+        SELECT b.*,
+               le.merchant,
+               le.transaction_date,
+               le.total_amount,
+               le.transaction_type,
+               COUNT(li.id)::int AS item_count
+        FROM bills b
+        LEFT JOIN ledger_entries le ON le.bill_id = b.id
+        LEFT JOIN line_items    li ON li.ledger_entry_id = le.id
+        WHERE b.user_id = $1`;
+    if (storeId) { params.push(storeId); q += ` AND b.store_id = $${params.length}`; }
+    q += ' GROUP BY b.id, le.merchant, le.transaction_date, le.total_amount, le.transaction_type';
+    q += ' ORDER BY b.created_at DESC LIMIT 50';
     const { rows } = await pool.query(q, params);
     return rows;
 }
 
 async function getBill(billId, userId) {
-    const { rows } = await pool.query('SELECT * FROM bills WHERE id=$1 AND user_id=$2', [billId, userId]);
-    return rows[0] || null;
+    const { rows } = await pool.query(
+        'SELECT * FROM bills WHERE id=$1 AND user_id=$2',
+        [billId, userId]
+    );
+    const bill = rows[0];
+    if (!bill) return null;
+
+    // Attach the ledger entry and its line items so the app can render bill details
+    const { rows: entries } = await pool.query(
+        'SELECT * FROM ledger_entries WHERE bill_id=$1',
+        [billId]
+    );
+    if (entries.length) {
+        const entry = entries[0];
+        const { rows: lineItems } = await pool.query(
+            'SELECT * FROM line_items WHERE ledger_entry_id=$1 ORDER BY id',
+            [entry.id]
+        );
+        entry.lineItems = lineItems;
+        bill.entry = entry;
+    }
+
+    return bill;
 }
 
 module.exports = { uploadBill, createManualBill, getBills, getBill };

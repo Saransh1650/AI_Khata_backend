@@ -35,75 +35,6 @@ Return ONLY valid JSON:
     return callGemini(prompt);
 }
 
-async function generateInventory() {
-    const { rows: stockItems } = await pool.query(
-        `SELECT product_name, quantity, unit, cost_price FROM stock_items
-         WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)
-         ORDER BY product_name`,
-        [userId, storeId]
-    );
-
-    const { rows: salesVelocity } = await pool.query(
-        `SELECT li.product_name,
-                SUM(li.quantity)::float AS total_qty_30d,
-                ROUND((SUM(li.quantity)/30.0)::numeric, 2)::float AS daily_velocity,
-                SUM(li.total_price)::float AS revenue_30d
-         FROM line_items li
-         JOIN ledger_entries le ON le.id = li.ledger_entry_id
-         WHERE le.user_id=$1
-           AND ($2::uuid IS NULL OR le.store_id=$2)
-           AND le.transaction_date >= NOW() - INTERVAL '30 days'
-         GROUP BY li.product_name
-         ORDER BY daily_velocity DESC LIMIT 20`,
-        [userId, storeId]
-    );
-
-    if (!salesVelocity.length && !stockItems.length) {
-        return { alerts: [], message: 'Add bills and stock items to get inventory insights.' };
-    }
-
-    const stockContext = stockItems.length > 0
-        ? `Current stock on hand: ${JSON.stringify(stockItems)}.`
-        : 'No stock levels have been set yet — base reorder suggestion on sales velocity alone.';
-
-    const velocityContext = salesVelocity.length > 0
-        ? `Last-30-day sales velocity per product: ${JSON.stringify(salesVelocity)}.`
-        : 'No sales data in last 30 days.';
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    const prompt = `You are an inventory manager for a ${storeType} retail shop. Today is ${today}.
-${stockContext}
-${velocityContext}
-
-Task: For each product that is at risk of running out OR already out of stock, generate one actionable alert.
-Rules:
-- estimatedDaysLeft: if stock_items shows quantity AND daily_velocity > 0, compute days = quantity / daily_velocity. Round down.
-- If no stock quantity recorded but product sells daily, flag as "unknown stock" with urgency medium.
-- urgency: "high" if daysLeft <= 3 or out of stock. "medium" if daysLeft 4–10 or unknown. "low" if 11–20.
-- reorderQty: suggest enough to last 30 days beyond current stock. Use daily_velocity * 30 - currentStock (min 1).
-- estimatedReorderCost: reorderQty * cost_price if cost_price available, else null.
-- actionText: ONE plain-English sentence telling the shopkeeper exactly what to do. E.g. "Order 50kg Sugar now — you have ~2 days left."
-- Only include products with urgency high or medium. If everything is fine, return empty alerts.
-
-Return ONLY valid JSON:
-{
-  "alerts": [{
-    "product": "name",
-    "currentStock": 0,
-    "unit": "kg/pcs/L/etc",
-    "dailyVelocity": 0.0,
-    "estimatedDaysLeft": 0,
-    "reorderQty": 0,
-    "estimatedReorderCost": 0,
-    "urgency": "high|medium",
-    "actionText": "single sentence"
-  }]
-}`;
-
-    return callGemini(prompt);
-}
-
 async function generateFestivals() {
     const festivals = getUpcomingFestivals(45, storeType); // Look ahead 45 days
     if (!festivals.length) return [];
@@ -264,13 +195,6 @@ async function run() {
             [userId, storeId]
         );
         const ledgerCount = count || 0;
-
-        // Inventory first (most critical for day-to-day)
-        const inventory = await generateInventory().catch(e => {
-            console.error('[refreshInsights] Inventory failed:', e.message);
-            return null;
-        });
-        await upsertInsight('inventory', inventory, ledgerCount);
 
         // Festival opportunities
         const festivals = await generateFestivals().catch(e => {
