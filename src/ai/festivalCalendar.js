@@ -5,7 +5,7 @@
 function getFestivals(year) {
     return [
         { name: 'Diwali', month: 9, day: 20, windowDays: 7, storeTypes: ['grocery', 'general', 'clothing', 'electronics'] },
-        { name: 'Holi', month: 2, day: 25, windowDays: 5, storeTypes: ['grocery', 'general', 'clothing'] },
+        { name: 'Holi', month: 2, day: 1, windowDays: 5, storeTypes: ['grocery', 'general', 'clothing'] },
         { name: 'Dussehra', month: 9, day: 2, windowDays: 5, storeTypes: ['grocery', 'general', 'clothing'] },
         { name: 'Navratri', month: 9, day: 3, windowDays: 9, storeTypes: ['grocery', 'general', 'clothing'] },
         { name: 'Ganesh Chaturthi', month: 7, day: 27, windowDays: 10, storeTypes: ['grocery', 'general'] },

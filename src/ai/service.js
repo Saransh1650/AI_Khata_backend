@@ -2,7 +2,6 @@
 const path = require('path');
 const { Worker } = require('worker_threads');
 const pool = require('../config/database');
-const { getUpcomingFestivals, getLastYearWindow } = require('./festivalCalendar');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const INSIGHT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -48,8 +47,8 @@ async function getJobResult(jobId, userId) {
 // ── AI Insights Cache ─────────────────────────────────────────────────────────
 
 /**
- * Returns cached insights from ai_insights table for a store.
- * Returns an object: { forecast, inventory, festival, generatedAt }
+ * Returns cached guidance from ai_insights table for a store.
+ * Returns an object: { guidance, generatedAt }
  */
 async function getInsights(userId, storeId) {
     const { rows } = await pool.query(
@@ -60,16 +59,16 @@ async function getInsights(userId, storeId) {
     );
 
     const result = {
-        forecast: null,
-        festival: [],
+        guidance: null,
         generatedAt: null,
     };
 
     for (const row of rows) {
-        result[row.type] = row.data;
-        // Use the oldest generatedAt to show the "least fresh" time
-        if (!result.generatedAt || row.generated_at < result.generatedAt) {
-            result.generatedAt = row.generated_at;
+        if (row.type === 'guidance') {
+            result.guidance = row.data;
+            if (!result.generatedAt || row.generated_at > result.generatedAt) {
+                result.generatedAt = row.generated_at;
+            }
         }
     }
 
@@ -110,15 +109,16 @@ async function checkAndRefreshIfNeeded(userId, storeId, storeType) {
             [storeId]
         );
 
-        // If no insights at all — trigger immediately
-        if (!rows.length) {
+        // If no insights at all, or no 'guidance' row yet — trigger immediately
+        const hasGuidance = rows.some(r => r.type === 'guidance');
+        if (!rows.length || !hasGuidance) {
             triggerInsightsRefresh(userId, storeId, storeType);
             return;
         }
 
         // Check if insights haven't been refreshed today (UTC calendar day)
-        const oldest = rows.reduce((a, b) => a.generated_at < b.generated_at ? a : b);
-        const genDateStr = new Date(oldest.generated_at).toISOString().slice(0, 10);
+        const guidanceRow = rows.find(r => r.type === 'guidance');
+        const genDateStr = new Date(guidanceRow.generated_at).toISOString().slice(0, 10);
         const todayStr = new Date().toISOString().slice(0, 10);
         if (genDateStr < todayStr) {
             console.log(`[AI] Insights for store ${storeId} not refreshed today (last: ${genDateStr}). Refreshing.`);
@@ -127,7 +127,7 @@ async function checkAndRefreshIfNeeded(userId, storeId, storeType) {
         }
 
         // Check if 20+ new ledger entries since last generation
-        const ledgerCountAtGen = oldest.ledger_count_at_generation || 0;
+        const ledgerCountAtGen = guidanceRow.ledger_count_at_generation || 0;
         const { rows: [{ count }] } = await pool.query(
             'SELECT COUNT(*)::int AS count FROM ledger_entries WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)',
             [userId, storeId]

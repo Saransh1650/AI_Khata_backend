@@ -1,179 +1,237 @@
 'use strict';
 /**
- * refreshInsights worker
- * ──────────────────────
- * Generates all 3 AI insight types (forecast, inventory, festival) for a
- * store and writes them into the ai_insights table. This is the ONLY place
- * that calls Gemini server-side. The app never calls Gemini directly.
+ * refreshInsights worker — Context-Aware Shop Guidance
+ * ─────────────────────────────────────────────────────
+ * Gathers real inventory, recent sales trends, shop activity, and the closest
+ * upcoming festival from the DB, then sends a single structured prompt to
+ * Gemini. The AI returns "guidance cards" (stock_check, pattern,
+ * event_context, info) that the app renders directly.
+ *
+ * RULES:
+ *  • Database is truth — only reason from actual shop data.
+ *  • No numerical predictions (no sales numbers, percentages, revenue).
+ *  • Qualitative reasoning only — practical, shopkeeper-friendly advice.
  *
  * workerData: { storeId, userId, storeType }
  */
 const { workerData, parentPort } = require('worker_threads');
 const pool = require('../config/database');
 const { callGemini } = require('../config/gemini');
-const { getUpcomingFestivals, getLastYearWindow } = require('../ai/festivalCalendar');
+const { getUpcomingFestivals } = require('../ai/festivalCalendar');
 
 const { storeId, userId, storeType = 'general' } = workerData;
 
-async function generateForecast() {
-    const { rows: sales } = await pool.query(
-        `SELECT date_trunc('day', transaction_date) AS day, SUM(total_amount) AS total
-         FROM ledger_entries
+// ── Data Gathering ──────────────────────────────────────────────────────────
+
+async function getInventory() {
+    const { rows } = await pool.query(
+        `SELECT product_name AS product, quantity, unit
+         FROM stock_items
          WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)
-           AND transaction_date >= NOW() - INTERVAL '90 days'
-         GROUP BY day ORDER BY day ASC`,
+         ORDER BY product_name`,
+        [userId, storeId]
+    );
+    return rows.map(r => ({
+        product: r.product,
+        quantity: Number(r.quantity),
+        unit: r.unit || 'units',
+    }));
+}
+
+async function getRecentSales() {
+    const { rows } = await pool.query(
+        `SELECT
+           li.product_name AS product,
+           SUM(CASE WHEN le.transaction_date >= NOW() - INTERVAL '14 days'
+                    THEN li.quantity ELSE 0 END)::float AS recent_qty,
+           SUM(CASE WHEN le.transaction_date < NOW() - INTERVAL '14 days'
+                     AND le.transaction_date >= NOW() - INTERVAL '28 days'
+                    THEN li.quantity ELSE 0 END)::float AS prior_qty
+         FROM line_items li
+         JOIN ledger_entries le ON le.id = li.ledger_entry_id
+         WHERE le.user_id=$1 AND ($2::uuid IS NULL OR le.store_id=$2)
+           AND le.transaction_date >= NOW() - INTERVAL '28 days'
+         GROUP BY li.product_name
+         ORDER BY recent_qty DESC
+         LIMIT 20`,
         [userId, storeId]
     );
 
-    if (!sales.length) return { forecast: [], summary: 'No sales data available yet.' };
+    return rows.map(r => {
+        let trend = 'stable';
+        if (r.prior_qty > 0) {
+            if (r.recent_qty > r.prior_qty * 1.2) trend = 'rising';
+            else if (r.recent_qty < r.prior_qty * 0.8) trend = 'slowing';
+        } else if (r.recent_qty > 0) {
+            trend = 'new';
+        }
+        return { product: r.product, trend };
+    });
+}
 
-    const prompt = `You are a demand forecasting AI for a ${storeType} retail store.
-Historical daily sales data (last 90 days): ${JSON.stringify(sales)}.
-Predict the daily sales for the next 30 days starting from tomorrow.
-Return ONLY valid JSON:
-{ "forecast": [{ "date": "YYYY-MM-DD", "predicted": 0.00, "confidenceLow": 0.00, "confidenceHigh": 0.00 }], "summary": "brief 1-sentence trend summary" }`;
+async function getShopActivity() {
+    const { rows: [activity] } = await pool.query(
+        `SELECT
+           SUM(CASE WHEN transaction_date >= NOW() - INTERVAL '7 days'
+                    THEN 1 ELSE 0 END)::int AS this_week,
+           SUM(CASE WHEN transaction_date < NOW() - INTERVAL '7 days'
+                     AND transaction_date >= NOW() - INTERVAL '14 days'
+                    THEN 1 ELSE 0 END)::int AS last_week
+         FROM ledger_entries
+         WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)
+           AND transaction_date >= NOW() - INTERVAL '14 days'`,
+        [userId, storeId]
+    );
+
+    let recentBusiness = 'steady';
+    const tw = activity?.this_week || 0;
+    const lw = activity?.last_week || 0;
+    if (lw > 0) {
+        if (tw > lw * 1.2) recentBusiness = 'growing';
+        else if (tw < lw * 0.8) recentBusiness = 'slowing';
+    } else if (tw > 0) {
+        recentBusiness = 'starting';
+    } else {
+        recentBusiness = 'quiet';
+    }
+
+    const { rows: busyRows } = await pool.query(
+        `SELECT
+           TRIM(TO_CHAR(transaction_date, 'Day')) AS day_name,
+           COUNT(*)::int AS cnt
+         FROM ledger_entries
+         WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)
+           AND transaction_date >= NOW() - INTERVAL '30 days'
+         GROUP BY day_name
+         ORDER BY cnt DESC
+         LIMIT 3`,
+        [userId, storeId]
+    );
+
+    return { recentBusiness, busyDays: busyRows.map(r => r.day_name) };
+}
+
+function getClosestFestival() {
+    const festivals = getUpcomingFestivals(45, storeType);
+    if (!festivals.length) return null;
+    const closest = festivals.reduce((a, b) => (a.date < b.date ? a : b));
+    const daysAway = Math.ceil((closest.date - new Date()) / 86400000);
+    return { name: closest.name, daysAway };
+}
+
+// ── Prompt & AI Call ────────────────────────────────────────────────────────
+
+async function generateGuidance(input) {
+    const isEvent = input.upcomingFestival && input.upcomingFestival.daysAway <= 10;
+
+    const prompt = `You are a shop advisor for a ${input.storeType} retail shop in India.
+Today is ${input.todayDate}.
+
+CORE RULES:
+1. Database is truth — only reason from the data provided below.
+2. No numerical predictions — no sales numbers, percentages, forecasts, or revenue estimates.
+3. Think like a shopkeeper's trusted advisor — practical, short, helpful.
+4. Qualitative reasoning only. Say "demand is picking up" not "demand increased 23%".
+
+INPUT DATA:
+${JSON.stringify(input, null, 2)}
+
+REASONING STEPS (follow in order, do NOT output these — only use them internally):
+1. Stock Readiness — classify each inventory item: GOOD / WATCH / LOW based on recent sales pace.
+2. Pattern Understanding — items gaining momentum, slowing, or newly appearing.
+${isEvent ? `3. **FESTIVAL DEMAND ANALYSIS** (CRITICAL — ${input.upcomingFestival.name} is ${input.upcomingFestival.daysAway} day(s) away):
+   a) Identify EVERY item in inventory whose demand will spike because of ${input.upcomingFestival.name}.
+      Think about what customers actually buy before and during this festival.
+      Examples for Holi: milk, sugar, ghee, maida, colours/gulaal, sweets, dry fruits, cold drinks, snacks, namkeen, paneer.
+      Examples for Diwali: sugar, ghee, dry fruits, maida, diyas, candles, sweets, pooja items.
+      Adapt to the specific festival and the shop's actual inventory.
+   b) For each festival-relevant item, assess urgency:
+      - "critical": Item WILL stock out — current stock is low AND demand will be very high. Owner must order TODAY.
+      - "high": Current stock may not last through the festival rush. Stock 2-3x normal quantity.
+      - "moderate": Demand will increase noticeably. Stock a bit extra.
+   c) Also flag any items NOT currently in inventory that customers WILL ask for (classification: "opportunity").
+   d) IMPORTANT: If an item is normally GOOD in stock_check but will face a demand surge during the festival,
+      it MUST appear in event_context with the right urgency — do NOT just list it as "GOOD" in stock_check and ignore the surge.
+4. Adjust stock_check: When in EVENT mode, stock statuses should FACTOR IN the festival demand.
+   An item with "okay" stock normally should become WATCH or LOW if festival demand will drain it.
+5. Produce UI Guidance Cards.` : `3. Festival Context — skip if no upcoming festival within 10 days.
+4. Produce UI Guidance Cards.`}
+
+OUTPUT FORMAT (STRICT JSON — return ONLY this object, nothing else):
+{
+  "mode": "${isEvent ? 'EVENT' : 'NORMAL'}",
+  "guidance": [
+    {
+      "type": "stock_check",
+      "items": [
+        { "product": "name", "status": "GOOD", "reason": "short reason", "action": "what to do" }
+      ]
+    },
+    {
+      "type": "pattern",
+      "insight": "short observation about a trend",
+      "action": "what to do about it"
+    }${isEvent ? `,
+    {
+      "type": "event_context",
+      "event": "${input.upcomingFestival.name}",
+      "summary": "one-line festival prep message",
+      "items": [
+        {
+          "product": "name",
+          "urgency": "critical",
+          "demand_note": "Why demand surges and how much extra to stock (e.g. 'Stock 3x usual — Holi sweets prep')",
+          "classification": "existing_product",
+          "action": "Order extra today"
+        }
+      ]
+    }` : `,
+    {
+      "type": "event_context",
+      "event": "festival name",
+      "items": [
+        { "product": "name", "classification": "existing_product", "action": "what to do" }
+      ]
+    }`},
+    {
+      "type": "info",
+      "insight": "helpful general message"
+    }
+  ]
+}
+
+CARD RULES:
+- "mode": Set to "EVENT" ONLY when upcomingFestival exists and daysAway <= 10. Otherwise "NORMAL".
+- "stock_check": Always include if inventory data exists. Max 8 items. Status: GOOD / WATCH / LOW.${isEvent ? `
+  In EVENT mode: factor in festival demand when deciding status. If milk normally is GOOD but Holi is tomorrow, mark it WATCH or LOW.` : ''}
+- "pattern": Include 1–2 cards if recent sales show notable trends. Skip if no clear pattern.
+- "event_context": Include ONLY when mode is "EVENT".${isEvent ? `
+  FESTIVAL ITEMS RULES:
+  - Go through ALL inventory items and flag every one that is festival-relevant for ${input.upcomingFestival.name}.
+  - "urgency": "critical" (will stock out, order TODAY) / "high" (stock 2-3x usual) / "moderate" (stock extra).
+  - "demand_note": REQUIRED — explain WHY demand spikes and suggest stocking level (e.g. "Holi sweets need lots of milk — stock 3x usual").
+  - "classification": "existing_product" if in inventory, "opportunity" if not.
+  - Put critical items first, then high, then moderate.
+  - "summary": one-line like "Holi is tomorrow — here's what will fly off the shelves"
+  - This card should be comprehensive — miss nothing that customers will ask for.` : ''}
+- "info": Include when data is thin, or as a practical general tip at the end.
+- Tone: Short sentences. Shopkeeper-friendly. No analytics jargon. Hindi-English mix OK.
+- ONLY return the JSON object. No markdown, no code fences, no explanation.`;
+
     return callGemini(prompt);
 }
 
-async function generateFestivals() {
-    const festivals = getUpcomingFestivals(45, storeType); // Look ahead 45 days
-    if (!festivals.length) return [];
+// ── Upsert ──────────────────────────────────────────────────────────────────
 
-    const results = [];
-    for (const festival of festivals) {
-        const { start, end } = getLastYearWindow(festival);
-        const daysAway = Math.ceil((festival.date - new Date()) / 86400000);
-
-        const { rows: lastYearSales } = await pool.query(
-            `SELECT li.product_name,
-                    SUM(li.quantity)::float AS qty_sold,
-                    SUM(li.total_price)::float AS revenue,
-                    AVG(li.unit_price)::float AS avg_price
-             FROM line_items li
-             JOIN ledger_entries le ON le.id = li.ledger_entry_id
-             WHERE le.user_id=$1
-               AND ($2::uuid IS NULL OR le.store_id=$2)
-               AND le.transaction_date BETWEEN $3 AND $4
-             GROUP BY li.product_name ORDER BY revenue DESC LIMIT 15`,
-            [userId, storeId, start, end]
-        );
-
-        // Also get current stock for festival-relevant products
-        const { rows: currentStock } = await pool.query(
-            `SELECT product_name, quantity, unit, cost_price FROM stock_items
-             WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)`,
-            [userId, storeId]
-        );
-
-        const orderDeadline = new Date(festival.date);
-        orderDeadline.setDate(orderDeadline.getDate() - 3);
-        const orderDeadlineStr = orderDeadline.toISOString().slice(0, 10);
-
-        // Products this store actually sells (last 30 days) — prevents hallucination
-        const { rows: salesVelocity } = await pool.query(
-            `SELECT li.product_name, SUM(li.quantity)::float AS total_qty_30d
-             FROM line_items li
-             JOIN ledger_entries le ON le.id = li.ledger_entry_id
-             WHERE le.user_id=$1 AND ($2::uuid IS NULL OR le.store_id=$2)
-               AND le.transaction_date >= NOW() - INTERVAL '30 days'
-             GROUP BY li.product_name ORDER BY total_qty_30d DESC LIMIT 20`,
-            [userId, storeId]
-        );
-
-        const hasHistory = lastYearSales.length > 0;
-        const hasCatalog = salesVelocity.length > 0;
-        const catalogList = hasCatalog ? salesVelocity.map(r => r.product_name).join(', ') : null;
-
-        const historyContext = hasHistory
-            ? `Last year during ${festival.name}, this store sold: ${JSON.stringify(lastYearSales)}.`
-            : `No sales history for ${festival.name} for this store.`;
-        const catalogContext = hasCatalog
-            ? `Products this store actually sells (last 30 days): ${catalogList}. ONLY recommend from these.`
-            : `No recent sales data — suggest typical ${festival.name} items for a ${storeType} store.`;
-        const stockContext = currentStock.length > 0
-            ? `Current stock on hand: ${JSON.stringify(currentStock)}.`
-            : 'No current stock data recorded.';
-
-        const prompt = `You are a festival sales advisor for a ${storeType} retail shop in India. Today is ${new Date().toISOString().slice(0, 10)}.
-Upcoming festival: ${festival.name} — ${daysAway} days away (${festival.date.toISOString().slice(0, 10)}).
-Order deadline to be ready: ${orderDeadlineStr} (3 days before festival).
-${historyContext}
-${catalogContext}
-${stockContext}
-
-CRITICAL RULE: ${hasCatalog ? `Recommend ONLY products from this store's catalog: ${catalogList}. Do NOT invent items the store doesn't sell.` : `No catalog available — suggest realistic ${festival.name} items for a ${storeType} store.`}
-
-Task: Generate specific, actionable stock preparation recommendations for ${festival.name}.
-For each recommended product:
-- If history exists: use actual qty_sold last year and suggest 15–30% more.
-- If no festival history but catalog exists: pick festival-relevant items from the store's own catalog.
-- stockGap: how many more units to order right now (recommendedQty - currentStock if known, else recommendedQty).
-- urgencyToBuy: "today" if daysAway <= 5, "this week" if daysAway <= 10, "soon" otherwise.
-- estimatedExtraRevenue: estimate total extra revenue from stocking this item for the festival (qty * avg_price). Make it realistic.
-- tip: ONE practical sentence with festival-specific advice.
-
-Also output:
-- totalEstimatedBoost: sum of all estimatedExtraRevenue values (realistic total extra income if prepared well).
-- festivalTip: ONE overall tip for the store owner for this festival.
-
-Return ONLY valid JSON:
-{
-  "festival": "${festival.name}",
-  "date": "${festival.date.toISOString().slice(0, 10)}",
-  "daysAway": ${daysAway},
-  "orderDeadline": "${orderDeadlineStr}",
-  "totalEstimatedBoost": 0,
-  "festivalTip": "one overall tip",
-  "recommendations": [{
-    "product": "name",
-    "lastYearQtySold": 0,
-    "recommendedQty": 0,
-    "stockGap": 0,
-    "unit": "kg/pcs/etc",
-    "estimatedExtraRevenue": 0,
-    "urgencyToBuy": "today|this week|soon",
-    "tip": "one tip"
-  }]
-} Top 6 products max.`;
-
-        try {
-            const recs = await callGemini(prompt);
-            // Normalise — the LLM might return the object directly or nested
-            const normalised = (recs && recs.recommendations)
-                ? recs
-                : { festival: festival.name, date: festival.date, daysAway, recommendations: [] };
-
-            results.push({
-                ...normalised,
-                festival: festival.name,
-                date: festival.date,
-                daysAway,
-                orderDeadline: orderDeadlineStr,
-            });
-        } catch (e) {
-            console.error(`[refreshInsights] Festival recs error for ${festival.name}:`, e.message);
-        }
-    }
-    return results;
-}
-
-/**
- * Write insight to DB ONLY if the new data is genuinely useful.
- * If Gemini failed (null) or returned an error/empty payload, keep whatever
- * is already in the table — never overwrite good cached data with bad data.
- */
 async function upsertInsight(type, data, ledgerCount) {
-    if (data === null || data === undefined) return; // Gemini failed — keep existing
+    if (data === null || data === undefined) return;
 
-    // Detect error / insufficient-data payloads and bail out early
     const serialised = JSON.stringify(data);
-    const isUseless =
-        (typeof data === 'object' && !Array.isArray(data) && data.message && !data.forecast && !data.alerts) ||
-        (Array.isArray(data) && data.length === 0) ||
-        serialised === '{}' || serialised === '[]';
+    const isUseless = serialised === '{}' || serialised === '[]'
+        || (typeof data === 'object' && !Array.isArray(data) && data.error);
 
     if (isUseless) {
-        console.log(`[refreshInsights] Skipping ${type} upsert — data looks empty/error, preserving existing cache.`);
+        console.log(`[refreshInsights] Skipping ${type} upsert — empty/error, preserving cache.`);
         return;
     }
 
@@ -184,8 +242,10 @@ async function upsertInsight(type, data, ledgerCount) {
          DO UPDATE SET data=$3, generated_at=NOW(), ledger_count_at_generation=$4`,
         [storeId, type, serialised, ledgerCount]
     );
-    console.log(`[refreshInsights] Upserted ${type} insight for store ${storeId}`);
+    console.log(`[refreshInsights] Upserted ${type} for store ${storeId}`);
 }
+
+// ── Main ────────────────────────────────────────────────────────────────────
 
 async function run() {
     console.log(`[refreshInsights] Starting for store ${storeId} (${storeType})`);
@@ -196,12 +256,55 @@ async function run() {
         );
         const ledgerCount = count || 0;
 
-        // Festival opportunities
-        const festivals = await generateFestivals().catch(e => {
-            console.error('[refreshInsights] Festivals failed:', e.message);
-            return null;
-        });
-        await upsertInsight('festival', festivals, ledgerCount);
+        // Gather shop data from DB
+        const [inventory, recentSales, shopActivity] = await Promise.all([
+            getInventory(),
+            getRecentSales(),
+            getShopActivity(),
+        ]);
+        const upcomingFestival = getClosestFestival();
+
+        const input = {
+            storeType,
+            todayDate: new Date().toISOString().slice(0, 10),
+            inventory,
+            recentSales,
+            shopActivity,
+            upcomingFestival,
+        };
+
+        // No data at all → store a helpful fallback, skip AI call
+        if (!inventory.length && !recentSales.length) {
+            const fallback = {
+                mode: 'NORMAL',
+                guidance: [{
+                    type: 'info',
+                    insight: 'Keep adding bills. Guidance improves as your shop data grows.',
+                }],
+            };
+            await upsertInsight('guidance', fallback, ledgerCount);
+            console.log('[refreshInsights] No data — stored fallback guidance');
+        } else {
+            const result = await generateGuidance(input);
+
+            // Validate structure — fall back gracefully if AI returned bad shape
+            const guidance = (result && result.mode && Array.isArray(result.guidance))
+                ? result
+                : {
+                    mode: 'NORMAL',
+                    guidance: [{
+                        type: 'info',
+                        insight: 'Could not generate advice right now. Keep adding bills.',
+                    }],
+                };
+            await upsertInsight('guidance', guidance, ledgerCount);
+        }
+
+        // Clean up legacy insight types from old system
+        await pool.query(
+            `DELETE FROM ai_insights WHERE store_id=$1 AND type IN ('forecast', 'festival', 'inventory')`,
+            [storeId]
+        ).catch(() => { /* ignore if rows don't exist */ });
 
         console.log(`[refreshInsights] Done for store ${storeId}`);
     } catch (e) {

@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS ai_results (
 CREATE TABLE IF NOT EXISTS ai_insights (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
-  type VARCHAR(50) NOT NULL CHECK (type IN ('forecast','inventory','festival')),
+  type VARCHAR(50) NOT NULL CHECK (type IN ('guidance','forecast','inventory','festival')),
   data JSONB NOT NULL,
   generated_at TIMESTAMP DEFAULT NOW(),
   ledger_count_at_generation INTEGER DEFAULT 0,
@@ -132,3 +132,5 @@ CREATE INDEX IF NOT EXISTS idx_stock_items_store ON stock_items(store_id);
 
 -- ── Migrations (safe to re-run on existing databases) ────────────────────────
 ALTER TABLE line_items ADD COLUMN IF NOT EXISTS unit VARCHAR(50) DEFAULT 'units';
+ALTER TABLE ai_insights DROP CONSTRAINT IF EXISTS ai_insights_type_check;
+ALTER TABLE ai_insights ADD CONSTRAINT ai_insights_type_check CHECK (type IN ('guidance','forecast','inventory','festival'));

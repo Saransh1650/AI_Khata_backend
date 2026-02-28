@@ -8,8 +8,12 @@ const svc = require('./service');
 // is the only thing that triggers AI. The app has NO way to start an AI call.
 router.get('/insights', authenticate, async (req, res, next) => {
     try {
-        const { storeId } = req.query;
+        const { storeId, storeType } = req.query;
         if (!storeId) return res.status(400).json({ error: 'storeId query param required' });
+
+        // Non-blocking stale-check — triggers background refresh if needed
+        svc.checkAndRefreshIfNeeded(req.user.userId, storeId, storeType || 'general');
+
         const insights = await svc.getInsights(req.user.userId, storeId);
         res.json({ insights });
     } catch (e) { next(e); }
