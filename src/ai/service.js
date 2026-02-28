@@ -117,11 +117,12 @@ async function checkAndRefreshIfNeeded(userId, storeId, storeType) {
             return;
         }
 
-        // Check TTL (using the oldest generated_at)
+        // Check if insights haven't been refreshed today (UTC calendar day)
         const oldest = rows.reduce((a, b) => a.generated_at < b.generated_at ? a : b);
-        const ageMs = Date.now() - new Date(oldest.generated_at).getTime();
-        if (ageMs > INSIGHT_TTL_MS) {
-            console.log(`[AI] Insights for store ${storeId} are stale (${Math.round(ageMs / 3600000)}h old). Refreshing.`);
+        const genDateStr = new Date(oldest.generated_at).toISOString().slice(0, 10);
+        const todayStr = new Date().toISOString().slice(0, 10);
+        if (genDateStr < todayStr) {
+            console.log(`[AI] Insights for store ${storeId} not refreshed today (last: ${genDateStr}). Refreshing.`);
             triggerInsightsRefresh(userId, storeId, storeType);
             return;
         }
@@ -167,11 +168,32 @@ async function startInsightsScheduler() {
         }
     };
 
-    // Run once at startup (delayed by 30s to let DB settle)
-    setTimeout(doRefresh, 30_000);
-    // Then every 24 hours
-    setInterval(doRefresh, INSIGHT_TTL_MS);
-    console.log('[AI Scheduler] Started — insights will auto-refresh every 24h');
+    // Run at 06:00, 14:00, 22:00 UTC — 3 times per day, evenly spaced 8h apart.
+    // This is the ONLY place AI workers are triggered by time. The app never starts AI.
+    const SCHEDULE_HOURS_UTC = [6, 14, 22];
+
+    const msToNextRun = () => {
+        const now = new Date();
+        const candidates = SCHEDULE_HOURS_UTC.map(h => {
+            const t = new Date(now);
+            t.setUTCHours(h, 0, 0, 0);
+            if (t <= now) t.setUTCDate(t.getUTCDate() + 1);
+            return t;
+        });
+        const next = candidates.reduce((a, b) => (a < b ? a : b));
+        return next - now;
+    };
+
+    const scheduleNext = () => {
+        const delay = msToNextRun();
+        const hrs = (delay / 3_600_000).toFixed(1);
+        const nextTime = new Date(Date.now() + delay).toISOString().slice(11, 16);
+        console.log(`[AI Scheduler] Next run in ${hrs}h (at ${nextTime} UTC)`);
+        setTimeout(async () => { await doRefresh(); scheduleNext(); }, delay);
+    };
+
+    scheduleNext();
+    console.log('[AI Scheduler] Started — insights refresh 3× daily at 06:00, 14:00, 22:00 UTC');
 }
 
 module.exports = {

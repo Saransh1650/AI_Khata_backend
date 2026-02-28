@@ -4,33 +4,19 @@ const { authenticate } = require('../auth/middleware');
 const svc = require('./service');
 
 // ── GET /ai/insights ──────────────────────────────────────────────────────────
-// Returns cached AI insights from DB. No AI call. Triggers background refresh
-// if insights are stale (>24h) or 20+ new ledger entries since last generation.
+// Pure DB read — returns whatever is cached. The scheduler (server-side only)
+// is the only thing that triggers AI. The app has NO way to start an AI call.
 router.get('/insights', authenticate, async (req, res, next) => {
     try {
-        const { storeId, storeType } = req.query;
+        const { storeId } = req.query;
         if (!storeId) return res.status(400).json({ error: 'storeId query param required' });
-
-        // Check and trigger background refresh if needed (non-blocking)
-        svc.checkAndRefreshIfNeeded(req.user.userId, storeId, storeType).catch(() => { });
-
-        // Return whatever is cached (may be empty on first use)
         const insights = await svc.getInsights(req.user.userId, storeId);
         res.json({ insights });
     } catch (e) { next(e); }
 });
 
-// ── POST /ai/insights/refresh ─────────────────────────────────────────────────
-// Forces an immediate background refresh. Returns immediately (non-blocking).
-// The app should re-fetch GET /ai/insights after a delay when pull-to-refreshing.
-router.post('/insights/refresh', authenticate, async (req, res, next) => {
-    try {
-        const { storeId, storeType } = req.body;
-        if (!storeId) return res.status(400).json({ error: 'storeId required' });
-        svc.triggerInsightsRefresh(req.user.userId, storeId, storeType);
-        res.json({ message: 'Refresh queued. Check back in ~30 seconds.' });
-    } catch (e) { next(e); }
-});
+// NOTE: POST /ai/insights/refresh intentionally removed.
+// AI refresh is driven by the backend scheduler and the ledger-entry hook only.
 
 // ── GET /ai/jobs/:id — kept for OCR bill processing ──────────────────────────
 router.get('/jobs/:id', authenticate, async (req, res, next) => {

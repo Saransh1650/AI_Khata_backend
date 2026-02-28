@@ -138,10 +138,27 @@ async function generateFestivals() {
         orderDeadline.setDate(orderDeadline.getDate() - 3);
         const orderDeadlineStr = orderDeadline.toISOString().slice(0, 10);
 
+        // Products this store actually sells (last 30 days) — prevents hallucination
+        const { rows: salesVelocity } = await pool.query(
+            `SELECT li.product_name, SUM(li.quantity)::float AS total_qty_30d
+             FROM line_items li
+             JOIN ledger_entries le ON le.id = li.ledger_entry_id
+             WHERE le.user_id=$1 AND ($2::uuid IS NULL OR le.store_id=$2)
+               AND le.transaction_date >= NOW() - INTERVAL '30 days'
+             GROUP BY li.product_name ORDER BY total_qty_30d DESC LIMIT 20`,
+            [userId, storeId]
+        );
+
         const hasHistory = lastYearSales.length > 0;
+        const hasCatalog = salesVelocity.length > 0;
+        const catalogList = hasCatalog ? salesVelocity.map(r => r.product_name).join(', ') : null;
+
         const historyContext = hasHistory
             ? `Last year during ${festival.name}, this store sold: ${JSON.stringify(lastYearSales)}.`
             : `No sales history for ${festival.name} for this store.`;
+        const catalogContext = hasCatalog
+            ? `Products this store actually sells (last 30 days): ${catalogList}. ONLY recommend from these.`
+            : `No recent sales data — suggest typical ${festival.name} items for a ${storeType} store.`;
         const stockContext = currentStock.length > 0
             ? `Current stock on hand: ${JSON.stringify(currentStock)}.`
             : 'No current stock data recorded.';
@@ -150,12 +167,15 @@ async function generateFestivals() {
 Upcoming festival: ${festival.name} — ${daysAway} days away (${festival.date.toISOString().slice(0, 10)}).
 Order deadline to be ready: ${orderDeadlineStr} (3 days before festival).
 ${historyContext}
+${catalogContext}
 ${stockContext}
+
+CRITICAL RULE: ${hasCatalog ? `Recommend ONLY products from this store's catalog: ${catalogList}. Do NOT invent items the store doesn't sell.` : `No catalog available — suggest realistic ${festival.name} items for a ${storeType} store.`}
 
 Task: Generate specific, actionable stock preparation recommendations for ${festival.name}.
 For each recommended product:
 - If history exists: use actual qty_sold last year and suggest 15–30% more.
-- If no history: suggest typical items for ${festival.name} in a ${storeType} store.
+- If no festival history but catalog exists: pick festival-relevant items from the store's own catalog.
 - stockGap: how many more units to order right now (recommendedQty - currentStock if known, else recommendedQty).
 - urgencyToBuy: "today" if daysAway <= 5, "this week" if daysAway <= 10, "soon" otherwise.
 - estimatedExtraRevenue: estimate total extra revenue from stocking this item for the festival (qty * avg_price). Make it realistic.

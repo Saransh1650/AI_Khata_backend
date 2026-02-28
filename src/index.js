@@ -26,6 +26,7 @@ app.use('/ledger', require('./ledger/routes'));
 app.use('/analytics', require('./analytics/routes'));
 app.use('/ai', require('./ai/routes'));
 app.use('/stocks', require('./stocks/routes'));
+app.use('/order-items', require('./order_items/routes'));
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date() }));

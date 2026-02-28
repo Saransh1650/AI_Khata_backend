@@ -105,6 +105,20 @@ CREATE TABLE IF NOT EXISTS stock_items (
   UNIQUE(store_id, product_name)
 );
 
+-- Order List (shopkeeper's persistent "to buy" list)
+CREATE TABLE IF NOT EXISTS order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  unit VARCHAR(50) DEFAULT 'units',
+  reason TEXT DEFAULT '',
+  qty INTEGER NOT NULL DEFAULT 1 CHECK (qty > 0),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, name)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_ledger_user_date ON ledger_entries(user_id, transaction_date);
 CREATE INDEX IF NOT EXISTS idx_line_items_product ON line_items(product_name);
