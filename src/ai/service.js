@@ -47,23 +47,32 @@ async function getJobResult(jobId, userId) {
 // ── AI Insights Cache ─────────────────────────────────────────────────────────
 
 /**
- * Returns cached guidance from ai_insights table for a store.
- * Returns an object: { guidance, generatedAt }
+ * Returns cached guidance from ai_insights table for a store,
+ * enriched with live inventory quantities so stock statuses stay
+ * accurate even if the user added stock after guidance was generated.
  */
 async function getInsights(userId, storeId) {
-    const { rows } = await pool.query(
-        `SELECT type, data, generated_at FROM ai_insights
-         WHERE store_id=$1
-         ORDER BY generated_at DESC`,
-        [storeId]
-    );
+    // Fetch cached guidance + live inventory in parallel
+    const [insightRes, stockRes] = await Promise.all([
+        pool.query(
+            `SELECT type, data, generated_at FROM ai_insights
+             WHERE store_id=$1
+             ORDER BY generated_at DESC`,
+            [storeId]
+        ),
+        pool.query(
+            `SELECT product_name, quantity, unit FROM stock_items
+             WHERE user_id=$1 AND ($2::uuid IS NULL OR store_id=$2)`,
+            [userId, storeId]
+        ),
+    ]);
 
     const result = {
         guidance: null,
         generatedAt: null,
     };
 
-    for (const row of rows) {
+    for (const row of insightRes.rows) {
         if (row.type === 'guidance') {
             result.guidance = row.data;
             if (!result.generatedAt || row.generated_at > result.generatedAt) {
@@ -72,7 +81,92 @@ async function getInsights(userId, storeId) {
         }
     }
 
+    // If we have guidance and inventory, enrich stock_check and event_context items
+    if (result.guidance && result.guidance.guidance && stockRes.rows.length) {
+        const stockMap = {};
+        for (const s of stockRes.rows) {
+            stockMap[s.product_name.toLowerCase()] = {
+                quantity: Number(s.quantity),
+                unit: s.unit || 'units',
+            };
+        }
+        result.guidance = enrichGuidanceWithLiveStock(result.guidance, stockMap);
+    }
+
     return result;
+}
+
+/**
+ * Enrich cached guidance cards with live inventory data.
+ * - stock_check items: attach currentQty/unit, auto-adjust status if stock changed significantly
+ * - event_context items: attach currentQty so frontend knows current stock level
+ */
+function enrichGuidanceWithLiveStock(guidance, stockMap) {
+    const enriched = { ...guidance, guidance: [...guidance.guidance] };
+
+    for (let i = 0; i < enriched.guidance.length; i++) {
+        const card = { ...enriched.guidance[i] };
+        enriched.guidance[i] = card;
+
+        if (card.type === 'stock_check' && Array.isArray(card.items)) {
+            card.items = card.items.map(item => {
+                const live = stockMap[(item.product || '').toLowerCase()];
+                if (!live) return { ...item, currentQty: null, inInventory: false };
+
+                const enrichedItem = {
+                    ...item,
+                    currentQty: live.quantity,
+                    unit: live.unit,
+                    inInventory: true,
+                };
+
+                // Auto-adjust status based on live quantity vs AI's original assessment
+                const origStatus = (item.status || '').toUpperCase();
+                if (origStatus === 'LOW' && live.quantity > 15) {
+                    enrichedItem.status = 'GOOD';
+                    enrichedItem.liveOverride = true;
+                    enrichedItem.reason = 'Recently restocked — looking good now';
+                    enrichedItem.action = 'No action needed';
+                } else if (origStatus === 'LOW' && live.quantity > 5) {
+                    enrichedItem.status = 'WATCH';
+                    enrichedItem.liveOverride = true;
+                    enrichedItem.reason = 'Restocked but still worth watching';
+                    enrichedItem.action = 'Monitor over the next few days';
+                } else if (origStatus === 'WATCH' && live.quantity > 20) {
+                    enrichedItem.status = 'GOOD';
+                    enrichedItem.liveOverride = true;
+                    enrichedItem.reason = 'Well stocked now';
+                    enrichedItem.action = 'No action needed';
+                } else if (origStatus === 'GOOD' && live.quantity <= 2) {
+                    enrichedItem.status = 'LOW';
+                    enrichedItem.liveOverride = true;
+                    enrichedItem.reason = 'Stock dropped since last check';
+                    enrichedItem.action = 'Restock soon';
+                } else if (origStatus === 'GOOD' && live.quantity <= 5) {
+                    enrichedItem.status = 'WATCH';
+                    enrichedItem.liveOverride = true;
+                    enrichedItem.reason = 'Stock running down — keep an eye';
+                    enrichedItem.action = 'Consider restocking';
+                }
+
+                return enrichedItem;
+            });
+        }
+
+        if (card.type === 'event_context' && Array.isArray(card.items)) {
+            card.items = card.items.map(item => {
+                const live = stockMap[(item.product || '').toLowerCase()];
+                return {
+                    ...item,
+                    currentQty: live ? live.quantity : null,
+                    unit: live ? live.unit : null,
+                    inInventory: !!live,
+                };
+            });
+        }
+    }
+
+    return enriched;
 }
 
 /**
@@ -192,7 +286,7 @@ async function startInsightsScheduler() {
     };
 
     scheduleNext();
-    console.log('[AI Scheduler] Started — insights refresh 3× daily at 06:00, 14:00, 22:00 UTC');
+    console.log('[AI Scheduler] Started — insights refresh 3x daily at 06:00, 14:00, 22:00 UTC');
 }
 
 module.exports = {

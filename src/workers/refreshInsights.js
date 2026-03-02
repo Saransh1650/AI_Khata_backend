@@ -18,6 +18,9 @@ const { workerData, parentPort } = require('worker_threads');
 const pool = require('../config/database');
 const { callGemini } = require('../config/gemini');
 const { getUpcomingFestivals } = require('../ai/festivalCalendar');
+const { generateExperienceGuidance } = require('../ai/experienceEngine');
+const { learnFromTransaction } = require('../ai/shopMemory');
+const { discoverProductRelationships } = require('../ai/relationshipIntelligence');
 
 const { storeId, userId, storeType = 'general' } = workerData;
 
@@ -204,7 +207,7 @@ CARD RULES:
 - "mode": Set to "EVENT" ONLY when upcomingFestival exists and daysAway <= 10. Otherwise "NORMAL".
 - "stock_check": Always include if inventory data exists. Max 8 items. Status: GOOD / WATCH / LOW.${isEvent ? `
   In EVENT mode: factor in festival demand when deciding status. If milk normally is GOOD but Holi is tomorrow, mark it WATCH or LOW.` : ''}
-- "pattern": Include 1–2 cards if recent sales show notable trends. Skip if no clear pattern.
+- "pattern": Include 1-2 cards if recent sales show notable trends. Skip if no clear pattern.
 - "event_context": Include ONLY when mode is "EVENT".${isEvent ? `
   FESTIVAL ITEMS RULES:
   - Go through ALL inventory items and flag every one that is festival-relevant for ${input.upcomingFestival.name}.
@@ -245,6 +248,46 @@ async function upsertInsight(type, data, ledgerCount) {
     console.log(`[refreshInsights] Upserted ${type} for store ${storeId}`);
 }
 
+// ── Memory Learning ─────────────────────────────────────────────────────────
+
+/**
+ * Learn from recent transactions to update shop memory
+ */
+async function updateShopMemory() {
+    try {
+        // Get recent transactions that haven't been learned from yet
+        const { rows } = await pool.query(
+            `SELECT le.id, le.transaction_date, le.merchant, le.total_amount,
+                    json_agg(json_build_object(
+                        'product_name', li.product_name,
+                        'quantity', li.quantity,
+                        'total_price', li.total_price
+                    )) as line_items
+             FROM ledger_entries le
+             JOIN line_items li ON le.id = li.ledger_entry_id
+             WHERE le.user_id = $1 AND ($2::uuid IS NULL OR le.store_id = $2)
+               AND le.transaction_date >= NOW() - INTERVAL '7 days'
+             GROUP BY le.id, le.transaction_date, le.merchant, le.total_amount
+             ORDER BY le.transaction_date DESC
+             LIMIT 50`,
+            [userId, storeId]
+        );
+        
+        for (const transaction of rows) {
+            await learnFromTransaction(userId, storeId, {
+                line_items: transaction.line_items,
+                transaction_date: transaction.transaction_date,
+                merchant: transaction.merchant,
+                total_amount: transaction.total_amount
+            });
+        }
+        
+        console.log(`[refreshInsights] Learned from ${rows.length} recent transactions`);
+    } catch (error) {
+        console.error('[refreshInsights] Memory learning error:', error.message);
+    }
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -255,6 +298,11 @@ async function run() {
             [userId, storeId]
         );
         const ledgerCount = count || 0;
+        
+        // Update shop memory from recent transactions
+        if (ledgerCount >= 5) {
+            await updateShopMemory();
+        }
 
         // Gather shop data from DB
         const [inventory, recentSales, shopActivity] = await Promise.all([
@@ -285,18 +333,41 @@ async function run() {
             await upsertInsight('guidance', fallback, ledgerCount);
             console.log('[refreshInsights] No data — stored fallback guidance');
         } else {
-            const result = await generateGuidance(input);
-
-            // Validate structure — fall back gracefully if AI returned bad shape
-            const guidance = (result && result.mode && Array.isArray(result.guidance))
-                ? result
-                : {
-                    mode: 'NORMAL',
-                    guidance: [{
-                        type: 'info',
-                        insight: 'Could not generate advice right now. Keep adding bills.',
-                    }],
-                };
+            let guidance;
+            
+            // Try RAG-driven experience guidance first (if enough data)
+            if (ledgerCount >= 10) {
+                console.log('[refreshInsights] Using RAG-driven experience guidance');
+                try {
+                    guidance = await generateExperienceGuidance(storeId, storeType, input);
+                    
+                    // Discover and update product relationships in background
+                    if (ledgerCount >= 20) {
+                        discoverProductRelationships(storeId, 90).catch(err => {
+                            console.error('[refreshInsights] Relationship discovery failed:', err.message);
+                        });
+                    }
+                } catch (error) {
+                    console.error('[refreshInsights] RAG guidance failed, falling back to traditional:', error.message);
+                    guidance = null;
+                }
+            }
+            
+            // Fallback to traditional AI guidance if RAG fails or insufficient data
+            if (!guidance) {
+                console.log('[refreshInsights] Using traditional AI guidance');
+                const result = await generateGuidance(input);
+                guidance = (result && result.mode && Array.isArray(result.guidance))
+                    ? result
+                    : {
+                        mode: 'NORMAL',
+                        guidance: [{
+                            type: 'info',
+                            insight: 'Could not generate advice right now. Keep adding bills.',
+                        }],
+                    };
+            }
+            
             await upsertInsight('guidance', guidance, ledgerCount);
         }
 

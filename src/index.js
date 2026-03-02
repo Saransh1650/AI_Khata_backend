@@ -25,6 +25,7 @@ app.use('/bills', require('./bills/routes'));
 app.use('/ledger', require('./ledger/routes'));
 app.use('/analytics', require('./analytics/routes'));
 app.use('/ai', require('./ai/routes'));
+app.use('/memory', require('./ai/ragMemoryRoutes')); // RAG-driven shop intelligence
 app.use('/stocks', require('./stocks/routes'));
 app.use('/order-items', require('./order_items/routes'));
 
