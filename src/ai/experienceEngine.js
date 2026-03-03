@@ -224,6 +224,68 @@ function buildStockCheckCard(inventory, recentSales, inventoryContext) {
 }
 
 /**
+ * Build dead stock card — inventory items not moving, with swap ideas
+ */
+function buildDeadStockCard(inventory, recentSales, salesExpansion) {
+    if (!inventory || !inventory.length) return null;
+
+    const recentlySoldSet = new Set((recentSales || []).map(r => r.product.toLowerCase()));
+    const slowingSet = new Set(
+        (recentSales || []).filter(r => r.trend === 'slowing').map(r => r.product.toLowerCase())
+    );
+    const inventorySet = new Set(inventory.map(i => i.product.toLowerCase()));
+
+    // Dead = in inventory with qty > 0 but no sales in 28 days, OR trend is slowing
+    const deadItems = inventory
+        .filter(item => {
+            const key = item.product.toLowerCase();
+            const qty = Number(item.quantity) || 0;
+            if (qty === 0) return false; // out of stock — stock_check handles this
+            return !recentlySoldSet.has(key) || slowingSet.has(key);
+        })
+        .map(item => ({
+            product: item.product,
+            quantity: Number(item.quantity),
+            unit: item.unit || 'units',
+            status: recentlySoldSet.has(item.product.toLowerCase()) ? 'slowing' : 'no_sales',
+        }))
+        // no_sales first, then slowing; within same status, higher qty first (more capital tied up)
+        .sort((a, b) => {
+            if (a.status !== b.status) return a.status === 'no_sales' ? -1 : 1;
+            return b.quantity - a.quantity;
+        })
+        .slice(0, 6);
+
+    if (!deadItems.length) return null;
+
+    // Swap ideas: missing complementary products + rising/new items not in stock
+    const swapIdeas = [
+        ...(salesExpansion?.missingComplementary || [])
+            .slice(0, 4)
+            .map(item => ({
+                product: item.missing,
+                reason: item.opportunity,
+                trigger: item.existing,
+            })),
+        ...(recentSales || [])
+            .filter(r => (r.trend === 'rising' || r.trend === 'new') && !inventorySet.has(r.product.toLowerCase()))
+            .slice(0, 2)
+            .map(r => ({
+                product: r.product,
+                reason: r.trend === 'new' ? 'New demand — customers starting to ask for this' : 'Demand is rising steadily',
+                trigger: null,
+            })),
+    ].slice(0, 4);
+
+    return {
+        type: 'dead_stock',
+        insight: 'Items not moving — free up capital by swapping with faster-selling products',
+        deadItems,
+        swapIdeas,
+    };
+}
+
+/**
  * Synthesize all intelligence into coherent experience-driven guidance
  */
 function synthesizeExperienceGuidance(intelligence) {
@@ -248,20 +310,10 @@ function synthesizeExperienceGuidance(intelligence) {
         guidance.guidance.push(stockCard);
     }
 
-    // 1. STRENGTH-BASED SUGGESTIONS (from RAG memory - highest priority)
-    if (shopMemory.strengthBased.length > 0) {
-        guidance.guidance.push({
-            type: 'strength_amplification',
-            insight: 'Based on your shop\'s proven track record',
-            items: shopMemory.strengthBased.map(item => ({
-                product: item.product,
-                status: getExperienceStatus(item, inventoryContext),
-                reason: item.reason,
-                action: getExperienceAction(item, inventoryContext),
-                memoryStrength: item.confidence,
-                priority: 'strength_product'
-            }))
-        });
+    // 1. DEAD STOCK — items not moving, suggest swaps (replaces strength_amplification)
+    const deadStockCard = buildDeadStockCard(input.inventory, input.recentSales, salesExpansion);
+    if (deadStockCard) {
+        guidance.guidance.push(deadStockCard);
     }
     
     // 2. EXPANSION SUGGESTIONS (Product relationships - MOST IMPORTANT)
