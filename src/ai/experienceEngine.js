@@ -141,6 +141,89 @@ function analyzeInventoryState(inventory, shopMemory) {
 // ── Experience Synthesis Engine ────────────────────────────────────────────
 
 /**
+ * Build a stock_check card from inventory + recent sales + memory context.
+ * Strength products get tighter LOW thresholds (they sell fast).
+ */
+function buildStockCheckCard(inventory, recentSales, inventoryContext) {
+    if (!inventory || !inventory.length) return null;
+
+    const strengthProducts = new Set(
+        (inventoryContext.strengthProductStatus || []).map(s => s.product.toLowerCase())
+    );
+    const recentlySoldSet = new Set(
+        (recentSales || []).map(r => r.product.toLowerCase())
+    );
+
+    const items = inventory.map(item => {
+        const name = item.product;
+        const qty = Number(item.quantity) || 0;
+        const nameLower = name.toLowerCase();
+        const isStrength = strengthProducts.has(nameLower);
+        const isActive = recentlySoldSet.has(nameLower);
+
+        let status, reason, action;
+
+        if (isStrength) {
+            // Tighter thresholds — strength products sell faster
+            if (qty <= 3) {
+                status = 'LOW';
+                reason = 'Running critically low — one of your top sellers';
+                action = 'Order immediately';
+            } else if (qty <= 10) {
+                status = 'WATCH';
+                reason = 'Stock is getting low for a high-demand product';
+                action = 'Reorder soon to avoid a stockout';
+            } else {
+                status = 'GOOD';
+                reason = 'Well-stocked strength product';
+                action = 'Keep maintaining current levels';
+            }
+        } else if (isActive) {
+            if (qty <= 2) {
+                status = 'LOW';
+                reason = 'Nearly out of stock';
+                action = 'Reorder now';
+            } else if (qty <= 7) {
+                status = 'WATCH';
+                reason = 'Stock is getting thin';
+                action = 'Consider restocking this week';
+            } else {
+                status = 'GOOD';
+                reason = 'Sufficient stock for current demand';
+                action = 'Monitor regularly';
+            }
+        } else {
+            if (qty === 0) {
+                status = 'LOW';
+                reason = 'Out of stock';
+                action = 'Reorder if you plan to stock this';
+            } else if (qty <= 5) {
+                status = 'WATCH';
+                reason = 'Low stock on slow-moving item';
+                action = 'Reorder only if needed';
+            } else {
+                status = 'GOOD';
+                reason = 'Adequate stock';
+                action = 'No action needed';
+            }
+        }
+
+        return { product: name, status, reason, action };
+    });
+
+    // Sort: LOW first, then WATCH, then GOOD — cap at 8
+    const order = { LOW: 0, WATCH: 1, GOOD: 2 };
+    items.sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
+    const trimmed = items.slice(0, 8);
+
+    // Skip card if everything is GOOD (no actionable info)
+    const hasActionable = trimmed.some(i => i.status !== 'GOOD');
+    if (!hasActionable) return null;
+
+    return { type: 'stock_check', items: trimmed };
+}
+
+/**
  * Synthesize all intelligence into coherent experience-driven guidance
  */
 function synthesizeExperienceGuidance(intelligence) {
@@ -158,7 +241,13 @@ function synthesizeExperienceGuidance(intelligence) {
         philosophy: 'experience_driven',
         guidance: []
     };
-    
+
+    // 0. STOCK CHECK — always first, most immediately actionable
+    const stockCard = buildStockCheckCard(input.inventory, input.recentSales, inventoryContext);
+    if (stockCard) {
+        guidance.guidance.push(stockCard);
+    }
+
     // 1. STRENGTH-BASED SUGGESTIONS (from RAG memory - highest priority)
     if (shopMemory.strengthBased.length > 0) {
         guidance.guidance.push({

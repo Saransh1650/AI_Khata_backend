@@ -14,6 +14,7 @@
  * - Understand shop identity and behavioral patterns
  */
 const pool = require('../config/database');
+const { emitRagEvent } = require('./ragEventEmitter');
 
 // ── Core Memory Operations ───────────────────────────────────────────────────
 
@@ -121,6 +122,14 @@ async function upsertShopMemory(storeId, memoryType, context, memoryData) {
     `;
     
     await pool.query(query, [storeId, memoryType, context, JSON.stringify(memoryData)]);
+
+    // Broadcast so the live dashboard can react
+    emitRagEvent(storeId, 'product_learned', {
+        memoryType,
+        context,
+        confidence: memoryData.confidence,
+        preview: Object.keys(memoryData).slice(0, 3).reduce((o, k) => { o[k] = memoryData[k]; return o; }, {})
+    });
 }
 
 /**
@@ -132,6 +141,13 @@ async function updateRelationshipStrength(storeId, productA, productB, relations
     `;
     
     await pool.query(query, [storeId, productA, productB, relationshipType, context]);
+
+    emitRagEvent(storeId, 'relationship_updated', {
+        productA,
+        productB,
+        relationshipType,
+        context
+    });
 }
 
 // ── Memory Retrieval for Guidance ───────────────────────────────────────────
@@ -427,6 +443,14 @@ async function upsertExperienceInsight(storeId, insight) {
         insight.confidence,
         insight.impact
     ]);
+
+    emitRagEvent(storeId, 'insight_generated', {
+        category: insight.category,
+        title: insight.title,
+        description: insight.description,
+        confidence: insight.confidence,
+        impact: insight.impact
+    });
 }
 
 module.exports = {

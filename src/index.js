@@ -18,6 +18,9 @@ const uploadDir = path.resolve(env.uploadDir);
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
 
+// Serve the RAG Memory dashboard at /dashboard
+app.use('/dashboard', express.static(path.join(__dirname, '../dashboard')));
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/auth', require('./auth/routes'));
 app.use('/stores', require('./stores/routes'));

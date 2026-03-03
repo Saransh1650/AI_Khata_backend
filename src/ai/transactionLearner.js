@@ -110,4 +110,138 @@ function shouldTriggerDeepLearning(transactionCount) {
     return milestones.includes(transactionCount);
 }
 
-module.exports = { learnFromNewTransaction };
+/**
+ * Initialize store memory from all historical transactions within lookback window
+ */
+async function initializeStoreMemory(userId, storeId, lookbackDays = 90) {
+    const { rows: transactions } = await pool.query(
+        `SELECT le.id FROM ledger_entries le
+         WHERE le.user_id = $1 AND le.store_id = $2
+           AND le.transaction_date >= NOW() - ($3 || ' days')::INTERVAL
+         ORDER BY le.transaction_date ASC`,
+        [userId, storeId, parseInt(lookbackDays)]
+    );
+
+    let learned = 0;
+    for (const { id } of transactions) {
+        try { await learnFromNewTransaction(id); learned++; }
+        catch (e) { console.error(`[TransactionLearner] Init skipped ${id}: ${e.message}`); }
+    }
+
+    try {
+        await discoverProductRelationships(storeId, lookbackDays);
+        await generateExperienceInsights(storeId);
+    } catch (e) {
+        console.error('[TransactionLearner] Post-init deep learning failed:', e.message);
+    }
+
+    return { transactionsProcessed: learned, total: transactions.length, lookbackDays };
+}
+
+/**
+ * Return a health summary of the shop's RAG memory
+ */
+async function checkMemoryHealth(storeId) {
+    const [memRes, relRes, insRes] = await Promise.all([
+        pool.query(
+            `SELECT COUNT(*)::int AS count, COALESCE(AVG(confidence), 0)::float AS avg_conf
+             FROM shop_memory WHERE store_id = $1`,
+            [storeId]
+        ),
+        pool.query(
+            `SELECT COUNT(*)::int AS count, COALESCE(AVG(strength), 0)::float AS avg_strength
+             FROM product_relationships WHERE store_id = $1`,
+            [storeId]
+        ),
+        pool.query(
+            `SELECT COUNT(*)::int AS count FROM experience_insights WHERE store_id = $1`,
+            [storeId]
+        ),
+    ]);
+
+    const productCount  = memRes.rows[0].count;
+    const avgConf       = memRes.rows[0].avg_conf;
+    const relCount      = relRes.rows[0].count;
+    const avgStrength   = relRes.rows[0].avg_strength;
+    const insightCount  = insRes.rows[0].count;
+
+    let score = 0;
+    score += Math.min(40, (productCount / 10) * 40);
+    score += Math.min(30, (avgConf / 0.6) * 30);
+    score += Math.min(20, (relCount  / 5)  * 20);
+    if (insightCount >= 1) score += 10;
+    score = Math.min(100, Math.round(score));
+
+    return {
+        productMemoryCount:       productCount,
+        avgConfidence:            Math.round(avgConf * 100) / 100,
+        relationshipsCount:       relCount,
+        avgRelationshipStrength:  Math.round(avgStrength * 100) / 100,
+        insightCount,
+        healthScore: score,
+        status: score >= 70 ? 'good' : score >= 40 ? 'growing' : 'initializing',
+    };
+}
+
+/**
+ * Remove weak/stale memory entries
+ */
+async function cleanupMemory(storeId, maxAgeDays = 180, minConfidence = 0.20) {
+    const [memDel, relDel] = await Promise.all([
+        pool.query(
+            `DELETE FROM shop_memory
+             WHERE store_id = $1 AND confidence < $2
+             RETURNING id`,
+            [storeId, minConfidence]
+        ),
+        pool.query(
+            `DELETE FROM product_relationships
+             WHERE store_id = $1 AND strength < $2
+             RETURNING id`,
+            [storeId, minConfidence]
+        ),
+    ]);
+    return {
+        productMemoryRemoved:  memDel.rowCount,
+        relationshipsRemoved:  relDel.rowCount,
+        parameters: { maxAgeDays, minConfidence },
+    };
+}
+
+/**
+ * Learn from all transactions within the last N days, then run deep analysis
+ */
+async function batchLearnFromRecentTransactions(userId, storeId, days = 30) {
+    const { rows: transactions } = await pool.query(
+        `SELECT le.id FROM ledger_entries le
+         WHERE le.user_id = $1 AND le.store_id = $2
+           AND le.transaction_date >= NOW() - ($3 || ' days')::INTERVAL
+         ORDER BY le.transaction_date ASC`,
+        [userId, storeId, parseInt(days)]
+    );
+
+    let learned = 0;
+    for (const { id } of transactions) {
+        try { await learnFromNewTransaction(id); learned++; }
+        catch (e) { console.error(`[TransactionLearner] Batch skip ${id}: ${e.message}`); }
+    }
+
+    if (learned > 0) {
+        try {
+            await discoverProductRelationships(storeId, days);
+            await generateExperienceInsights(storeId);
+        } catch (e) {
+            console.error('[TransactionLearner] Post-batch deep learning failed:', e.message);
+        }
+    }
+
+    return learned;
+}
+
+module.exports = {
+    learnFromNewTransaction,
+    initializeStoreMemory,
+    checkMemoryHealth,
+    cleanupMemory,
+    batchLearnFromRecentTransactions,
+};

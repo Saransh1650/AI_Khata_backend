@@ -289,9 +289,24 @@ async function startInsightsScheduler() {
     console.log('[AI Scheduler] Started — insights refresh 3x daily at 06:00, 14:00, 22:00 UTC');
 }
 
+/**
+ * Force-deletes existing insights for a store and immediately triggers a fresh AI run.
+ * For testing/dev use only.
+ */
+async function forceRefreshInsights(userId, storeId, storeType) {
+    await pool.query(
+        'DELETE FROM ai_insights WHERE store_id=$1',
+        [storeId]
+    );
+    // Remove from in-flight guard so it can run immediately
+    refreshInFlight.delete(storeId);
+    triggerInsightsRefresh(userId, storeId, storeType || 'general');
+}
+
 module.exports = {
     // OCR/bills jobs
     createJob, getJob, getJobResult,
     // Insights cache
     getInsights, triggerInsightsRefresh, checkAndRefreshIfNeeded, startInsightsScheduler,
+    forceRefreshInsights,
 };
