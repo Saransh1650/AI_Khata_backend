@@ -1,0 +1,1582 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VyapaarAI — RAG Memory Dashboard</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --surface: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --blue: #58a6ff;
+        --purple: #bc8cff;
+        --orange: #f0883e;
+        --red: #f85149;
+        --yellow: #d29922;
+        --teal: #39d353;
+        --radius: 8px;
+        --font: "Segoe UI", system-ui, sans-serif;
+        --mono: "Cascadia Code", "Fira Code", "Courier New", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 14px;
+        min-height: 100vh;
+        overflow-y: auto;
+      }
+
+      /* ── Login Screen ──────────────────────────────────── */
+      #login-screen {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 2rem;
+      }
+      .login-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 2.5rem;
+        width: 100%;
+        max-width: 400px;
+      }
+      .login-card h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.3rem;
+      }
+      .login-card p {
+        color: var(--muted);
+        margin-bottom: 2rem;
+        font-size: 0.875rem;
+      }
+      .form-group {
+        margin-bottom: 1rem;
+      }
+      .form-group label {
+        display: block;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--muted);
+        margin-bottom: 0.4rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      input[type="text"],
+      input[type="password"],
+      input[type="url"],
+      select {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        padding: 0.6rem 0.8rem;
+        font-size: 0.9rem;
+        font-family: var(--font);
+        outline: none;
+        transition: border-color 0.2s;
+      }
+      input:focus,
+      select:focus {
+        border-color: var(--blue);
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        cursor: pointer;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        font-weight: 600;
+        padding: 0.6rem 1.2rem;
+        transition: opacity 0.2s;
+      }
+      .btn:hover {
+        opacity: 0.85;
+      }
+      .btn-primary {
+        background: var(--blue);
+        color: #000;
+        width: 100%;
+        justify-content: center;
+      }
+      .btn-sm {
+        padding: 0.4rem 0.9rem;
+        font-size: 0.8rem;
+      }
+      .btn-green {
+        background: var(--green);
+        color: #000;
+      }
+      .btn-orange {
+        background: var(--orange);
+        color: #000;
+      }
+      .btn-red {
+        background: var(--red);
+        color: #fff;
+      }
+      .btn-purple {
+        background: var(--purple);
+        color: #000;
+      }
+      .error-msg {
+        color: var(--red);
+        font-size: 0.8rem;
+        margin-top: 0.5rem;
+        min-height: 1.2em;
+      }
+
+      /* ── Main App ──────────────────────────────────────── */
+      #app {
+        display: none;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+
+      /* Top Bar */
+      .topbar {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 0 1.5rem;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-shrink: 0;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+      .topbar .logo {
+        font-weight: 700;
+        font-size: 1.05rem;
+        color: var(--blue);
+      }
+      .topbar .store-selector {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+      }
+      .topbar select {
+        width: 220px;
+        height: 32px;
+        padding: 0 0.6rem;
+        font-size: 0.85rem;
+      }
+      .conn-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 20px;
+        font-weight: 600;
+        margin-left: auto;
+      }
+      .conn-badge.connected {
+        background: rgba(63, 185, 80, 0.15);
+        color: var(--green);
+      }
+      .conn-badge.disconnected {
+        background: rgba(248, 81, 73, 0.15);
+        color: var(--red);
+      }
+      .conn-badge.connecting {
+        background: rgba(88, 166, 255, 0.15);
+        color: var(--blue);
+      }
+      .conn-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .conn-badge.connected .conn-dot {
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+
+      /* Layout */
+      .app-body {
+        display: flex;
+        flex: 1;
+        align-items: flex-start;
+      }
+
+      /* Left: Event Feed */
+      .feed-panel {
+        width: 340px;
+        flex-shrink: 0;
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        position: sticky;
+        top: 52px;
+        height: calc(100vh - 52px);
+        overflow: hidden;
+      }
+      .panel-header {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .feed-events {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+      .event-item {
+        display: flex;
+        gap: 0.5rem;
+        align-items: flex-start;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.55rem 0.7rem;
+        font-size: 0.78rem;
+        animation: slidein 0.25s ease;
+      }
+      @keyframes slidein {
+        from {
+          opacity: 0;
+          transform: translateY(-6px);
+        }
+      }
+      .event-icon {
+        font-size: 1rem;
+        flex-shrink: 0;
+        line-height: 1.3;
+      }
+      .event-body {
+        flex: 1;
+        min-width: 0;
+      }
+      .event-type {
+        font-weight: 700;
+        color: var(--blue);
+        text-transform: uppercase;
+        font-size: 0.7rem;
+        letter-spacing: 0.04em;
+      }
+      .event-detail {
+        color: var(--text);
+        margin-top: 0.15rem;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+      .event-time {
+        color: var(--muted);
+        font-size: 0.68rem;
+        margin-top: 0.15rem;
+        font-family: var(--mono);
+      }
+      .event-item.ev-product {
+        border-left: 3px solid var(--blue);
+      }
+      .event-item.ev-relation {
+        border-left: 3px solid var(--purple);
+      }
+      .event-item.ev-insight {
+        border-left: 3px solid var(--orange);
+      }
+      .event-item.ev-snapshot {
+        border-left: 3px solid var(--green);
+      }
+      .event-item.ev-heartbeat {
+        border-left: 3px solid var(--border);
+        opacity: 0.5;
+      }
+
+      /* Right: Dashboard panels */
+      .main-panel {
+        flex: 1;
+        padding: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        min-width: 0;
+      }
+
+      /* Stats Row */
+      .stats-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.75rem;
+      }
+      .stat-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1rem 1.1rem;
+      }
+      .stat-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 0.4rem;
+      }
+      .stat-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        font-family: var(--mono);
+        line-height: 1;
+      }
+      .stat-sub {
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin-top: 0.25rem;
+      }
+      .cv-green {
+        color: var(--green);
+      }
+      .cv-blue {
+        color: var(--blue);
+      }
+      .cv-purple {
+        color: var(--purple);
+      }
+      .cv-orange {
+        color: var(--orange);
+      }
+
+      /* Action bar */
+      .action-bar {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+      }
+      .action-bar .sep {
+        flex: 1;
+      }
+
+      /* Section */
+      .section {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .section-head {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .section-title {
+        font-weight: 700;
+        font-size: 0.875rem;
+      }
+      .section-body {
+        padding: 1rem;
+      }
+      .badge {
+        display: inline-block;
+        background: rgba(88, 166, 255, 0.15);
+        color: var(--blue);
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 0.15rem 0.5rem;
+      }
+
+      /* Product memory cards */
+      .product-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 0.75rem;
+      }
+      .product-card {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.8rem;
+        transition: border-color 0.2s;
+      }
+      .product-card:hover {
+        border-color: var(--blue);
+      }
+      .product-name {
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        font-size: 0.875rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.4rem;
+      }
+      .product-meta {
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin-bottom: 0.55rem;
+      }
+      .conf-bar-wrap {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .conf-bar-bg {
+        flex: 1;
+        height: 5px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .conf-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.6s ease;
+      }
+      .conf-val {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--muted);
+        flex-shrink: 0;
+        width: 36px;
+        text-align: right;
+      }
+      .freq-badge {
+        font-size: 0.68rem;
+        background: rgba(63, 185, 80, 0.12);
+        color: var(--green);
+        border-radius: 4px;
+        padding: 0.1rem 0.35rem;
+      }
+
+      /* Relationships */
+      .rel-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .rel-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.65rem 0.9rem;
+        font-size: 0.82rem;
+      }
+      .rel-products {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex: 1;
+        min-width: 0;
+      }
+      .rel-p {
+        font-weight: 600;
+      }
+      .rel-arrow {
+        color: var(--muted);
+      }
+      .rel-type {
+        font-size: 0.7rem;
+        color: var(--purple);
+        background: rgba(188, 140, 255, 0.1);
+        border-radius: 4px;
+        padding: 0.1rem 0.4rem;
+        flex-shrink: 0;
+      }
+      .rel-strength {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        flex-shrink: 0;
+        width: 44px;
+        text-align: right;
+      }
+      .strength-bar {
+        width: 60px;
+        height: 5px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .strength-fill {
+        height: 100%;
+        border-radius: 3px;
+        background: var(--purple);
+        transition: width 0.6s ease;
+      }
+
+      /* Insights */
+      .insight-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 0.75rem;
+      }
+      .insight-card {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.9rem;
+        border-top: 3px solid var(--orange);
+      }
+      .insight-card.high {
+        border-top-color: var(--red);
+      }
+      .insight-card.medium {
+        border-top-color: var(--orange);
+      }
+      .insight-card.low {
+        border-top-color: var(--yellow);
+      }
+      .insight-cat {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: var(--orange);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 0.35rem;
+      }
+      .insight-title {
+        font-weight: 700;
+        font-size: 0.875rem;
+        margin-bottom: 0.35rem;
+      }
+      .insight-desc {
+        font-size: 0.78rem;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .insight-footer {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.6rem;
+      }
+      .impact-badge {
+        font-size: 0.68rem;
+        font-weight: 700;
+        border-radius: 4px;
+        padding: 0.1rem 0.4rem;
+      }
+      .impact-badge.high {
+        background: rgba(248, 81, 73, 0.15);
+        color: var(--red);
+      }
+      .impact-badge.medium {
+        background: rgba(240, 136, 62, 0.15);
+        color: var(--orange);
+      }
+      .impact-badge.low {
+        background: rgba(210, 153, 34, 0.15);
+        color: var(--yellow);
+      }
+
+      /* Memory health gauge */
+      .health-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 0.75rem;
+      }
+      .health-item {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.75rem;
+        text-align: center;
+      }
+      .health-num {
+        font-family: var(--mono);
+        font-size: 1.4rem;
+        font-weight: 700;
+      }
+      .health-lbl {
+        font-size: 0.72rem;
+        color: var(--muted);
+        margin-top: 0.2rem;
+      }
+
+      /* Empty state */
+      .empty {
+        text-align: center;
+        color: var(--muted);
+        padding: 2rem;
+        font-size: 0.875rem;
+      }
+      .empty .empty-icon {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+      }
+
+      /* Scrollbars */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      /* Spinner */
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--border);
+        border-top-color: var(--blue);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ── LOGIN ──────────────────────────────────────────────────────────────── -->
+    <div id="login-screen">
+      <div class="login-card">
+        <h1>🧠 RAG Memory</h1>
+        <p>Live dashboard — see your shop's AI learning in real time</p>
+
+        <div class="form-group">
+          <label>Backend URL</label>
+          <input
+            type="url"
+            id="api-url"
+            value="http://localhost:3000"
+            placeholder="https://your-backend.com"
+          />
+        </div>
+        <div class="form-group">
+          <label>Username</label>
+          <input
+            type="text"
+            id="username"
+            placeholder="your username"
+            autocomplete="username"
+          />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input
+            type="password"
+            id="password"
+            placeholder="••••••••"
+            autocomplete="current-password"
+          />
+        </div>
+        <button class="btn btn-primary" onclick="doLogin()">
+          <span id="login-btn-text">Connect</span>
+        </button>
+        <div class="error-msg" id="login-error"></div>
+      </div>
+    </div>
+
+    <!-- ── APP ────────────────────────────────────────────────────────────────── -->
+    <div id="app">
+      <div class="topbar">
+        <span class="logo">🧠 VyapaarAI · RAG Memory</span>
+        <div class="store-selector">
+          <select id="store-select" onchange="selectStore(this.value)">
+            <option value="">— pick a store —</option>
+          </select>
+        </div>
+        <div class="conn-badge disconnected" id="conn-badge">
+          <div class="conn-dot"></div>
+          <span id="conn-text">Disconnected</span>
+        </div>
+        <button
+          class="btn btn-sm"
+          style="background: var(--border); color: var(--text)"
+          onclick="doLogout()"
+        >
+          Logout
+        </button>
+      </div>
+
+      <div class="app-body">
+        <!-- LEFT: Live Event Feed -->
+        <div class="feed-panel">
+          <div class="panel-header">
+            Live events
+            <button
+              class="btn btn-sm"
+              style="background: var(--border); color: var(--muted)"
+              onclick="clearFeed()"
+            >
+              Clear
+            </button>
+          </div>
+          <div class="feed-events" id="event-feed">
+            <div class="empty">
+              <div class="empty-icon">📡</div>
+              Select a store to start streaming
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Dashboard -->
+        <div class="main-panel">
+          <!-- Stats row -->
+          <div class="stats-row">
+            <div class="stat-card">
+              <div class="stat-label">Products Learned</div>
+              <div class="stat-value cv-blue" id="stat-products">—</div>
+              <div class="stat-sub">in shop memory</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Relationships</div>
+              <div class="stat-value cv-purple" id="stat-rels">—</div>
+              <div class="stat-sub">product pairs</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Avg Confidence</div>
+              <div class="stat-value cv-green" id="stat-conf">—</div>
+              <div class="stat-sub">memory quality</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Insights</div>
+              <div class="stat-value cv-orange" id="stat-insights">—</div>
+              <div class="stat-sub">experience insights</div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="action-bar">
+            <button class="btn btn-green btn-sm" onclick="triggerLearn()">
+              ⚡ Learn from Transactions
+            </button>
+            <button class="btn btn-orange btn-sm" onclick="triggerInit()">
+              🚀 Initialize Memory
+            </button>
+            <button class="btn btn-purple btn-sm" onclick="refreshDashboard()">
+              🔄 Refresh
+            </button>
+            <div class="sep"></div>
+            <span style="font-size: 0.75rem; color: var(--muted)"
+              >Last update: <span id="last-update">—</span></span
+            >
+          </div>
+
+          <!-- Memory Health -->
+          <div class="section" id="health-section">
+            <div class="section-head">
+              <span class="section-title">Memory Health</span>
+              <span class="badge" id="health-badge">—</span>
+            </div>
+            <div class="section-body">
+              <div class="health-row" id="health-cards">
+                <div class="empty">
+                  <div class="empty-icon">🏥</div>
+                  No health data yet
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Product Memory -->
+          <div class="section">
+            <div class="section-head">
+              <span class="section-title">Product Memory</span>
+              <span class="badge" id="products-count">0 products</span>
+            </div>
+            <div class="section-body">
+              <div class="product-grid" id="product-grid">
+                <div class="empty">
+                  <div class="empty-icon">🧪</div>
+                  No product memory yet
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Relationships -->
+          <div class="section">
+            <div class="section-head">
+              <span class="section-title">Product Relationships</span>
+              <span class="badge" id="rels-count">0 pairs</span>
+            </div>
+            <div class="section-body">
+              <div class="rel-list" id="rel-list">
+                <div class="empty">
+                  <div class="empty-icon">🔗</div>
+                  No relationships discovered yet
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Insights -->
+          <div class="section">
+            <div class="section-head">
+              <span class="section-title">Experience Insights</span>
+              <span class="badge" id="insights-count">0 insights</span>
+            </div>
+            <div class="section-body">
+              <div class="insight-grid" id="insight-grid">
+                <div class="empty">
+                  <div class="empty-icon">💡</div>
+                  No insights generated yet
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ── State ────────────────────────────────────────────────────────────────────
+      const S = {
+        apiUrl: "",
+        token: "",
+        storeId: "",
+        sse: null,
+        eventCount: 0,
+        pollTimer: null,
+      };
+
+      // ── Helpers ──────────────────────────────────────────────────────────────────
+      const $ = (id) => document.getElementById(id);
+      const el = (tag, cls, html) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (html) e.innerHTML = html;
+        return e;
+      };
+      const fmt = (n) =>
+        n !== null && n !== undefined ? Number(n).toFixed(2) : "—";
+      const pct = (n) =>
+        n !== null && n !== undefined ? Math.round(Number(n) * 100) + "%" : "—";
+      const ts = () => new Date().toLocaleTimeString("en", { hour12: false });
+
+      function confColor(c) {
+        if (c >= 0.75) return "var(--green)";
+        if (c >= 0.5) return "var(--blue)";
+        if (c >= 0.3) return "var(--yellow)";
+        return "var(--red)";
+      }
+
+      async function api(method, path, body) {
+        const opts = {
+          method,
+          headers: {
+            Authorization: "Bearer " + S.token,
+            "Content-Type": "application/json",
+          },
+        };
+        if (body) opts.body = JSON.stringify(body);
+        const res = await fetch(S.apiUrl + path, opts);
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.error || res.statusText);
+        }
+        return res.json();
+      }
+
+      function showToast(msg, ok = true) {
+        // simple status via last-update
+        $("last-update").textContent = msg;
+        $("last-update").style.color = ok ? "var(--green)" : "var(--red)";
+        setTimeout(() => ($("last-update").style.color = "var(--muted)"), 3000);
+      }
+
+      // ── Login ─────────────────────────────────────────────────────────────────────
+      async function doLogin() {
+        const apiUrl = $("api-url").value.trim().replace(/\/$/, "");
+        const username = $("username").value.trim();
+        const password = $("password").value;
+        $("login-error").textContent = "";
+        $("login-btn-text").textContent = "Connecting…";
+
+        try {
+          const res = await fetch(apiUrl + "/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: username, password }),
+          });
+          if (!res.ok) {
+            const e = await res.json().catch(() => ({}));
+            throw new Error(e.error || "Login failed");
+          }
+          const data = await res.json();
+          const token = data.token || data.accessToken || data.access_token;
+          if (!token) throw new Error("No token in response");
+
+          S.apiUrl = apiUrl;
+          S.token = token;
+          await loadStores();
+          $("login-screen").style.display = "none";
+          $("app").style.display = "flex";
+        } catch (err) {
+          $("login-error").textContent = err.message;
+        } finally {
+          $("login-btn-text").textContent = "Connect";
+        }
+      }
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && $("login-screen").style.display !== "none")
+          doLogin();
+      });
+
+      function doLogout() {
+        disconnectSSE();
+        clearInterval(S.pollTimer);
+        S.token = S.storeId = "";
+        $("app").style.display = "none";
+        $("login-screen").style.display = "flex";
+        $("store-select").innerHTML =
+          '<option value="">— pick a store —</option>';
+      }
+
+      // ── Store Selection ───────────────────────────────────────────────────────────
+      async function loadStores() {
+        const data = await api("GET", "/stores");
+        const sel = $("store-select");
+        sel.innerHTML = '<option value="">— pick a store —</option>';
+        (data.stores || []).forEach((store) => {
+          const opt = document.createElement("option");
+          opt.value = store.id;
+          opt.textContent =
+            store.name + (store.type ? " (" + store.type + ")" : "");
+          sel.appendChild(opt);
+        });
+        if (data.stores && data.stores.length === 1) {
+          sel.value = data.stores[0].id;
+          selectStore(data.stores[0].id);
+        }
+      }
+
+      async function selectStore(storeId) {
+        if (!storeId) return;
+        S.storeId = storeId;
+        disconnectSSE();
+        clearFeed();
+        connectSSE(storeId);
+        await refreshDashboard();
+        // Poll every 30s to keep panels fresh
+        clearInterval(S.pollTimer);
+        S.pollTimer = setInterval(refreshDashboard, 30000);
+      }
+
+      // ── SSE ───────────────────────────────────────────────────────────────────────
+      function connectSSE(storeId) {
+        setBadge("connecting", "Connecting…");
+        const url =
+          S.apiUrl +
+          "/memory/stream/" +
+          storeId +
+          "?token=" +
+          encodeURIComponent(S.token);
+        const es = new EventSource(url);
+        S.sse = es;
+
+        es.addEventListener("snapshot", (e) => {
+          const d = JSON.parse(e.data);
+          addEvent(
+            "snapshot",
+            "📸",
+            "Snapshot loaded",
+            d.storeName + " — initial state synced",
+          );
+          renderSnapshot(d);
+        });
+
+        es.addEventListener("product_learned", (e) => {
+          const d = JSON.parse(e.data);
+          addEvent(
+            "ev-product",
+            "🧠",
+            "Product Learned",
+            d.context +
+              (d.memoryType ? " (" + d.memoryType + ")" : "") +
+              (d.confidence ? " · conf " + fmt(d.confidence) : ""),
+          );
+          bumpStat("stat-products", 1, true);
+          scheduleRefreshProducts();
+        });
+
+        es.addEventListener("relationship_updated", (e) => {
+          const d = JSON.parse(e.data);
+          addEvent(
+            "ev-relation",
+            "🔗",
+            "Relationship",
+            (d.productA || "?") +
+              " ↔ " +
+              (d.productB || "?") +
+              (d.relationshipType ? " · " + d.relationshipType : ""),
+          );
+          bumpStat("stat-rels", 1, true);
+          scheduleRefreshRels();
+        });
+
+        es.addEventListener("insight_generated", (e) => {
+          const d = JSON.parse(e.data);
+          addEvent(
+            "ev-insight",
+            "💡",
+            "Insight",
+            (d.category || "") + " — " + (d.title || ""),
+          );
+          scheduleRefreshInsights();
+        });
+
+        es.addEventListener("heartbeat", () => {
+          addEvent(
+            "ev-heartbeat",
+            "🫀",
+            "Heartbeat",
+            "Connection alive · " + ts(),
+            true,
+          );
+          setBadge("connected", "Live");
+        });
+
+        es.addEventListener("deep_learning_started", (e) => {
+          addEvent(
+            "ev-insight",
+            "⚙️",
+            "Deep Learning",
+            "Relationship discovery triggered",
+          );
+        });
+        es.addEventListener("deep_learning_completed", (e) => {
+          addEvent(
+            "ev-insight",
+            "✅",
+            "Deep Learning",
+            "Cycle complete — refreshing dashboard",
+          );
+          refreshDashboard();
+        });
+
+        es.onerror = () => {
+          setBadge("disconnected", "Disconnected");
+          addEvent(
+            "ev-heartbeat",
+            "⚠️",
+            "SSE Disconnected",
+            "Will retry automatically",
+          );
+        };
+        es.onopen = () => {
+          setBadge("connected", "Live");
+          addEvent(
+            "ev-snapshot",
+            "🟢",
+            "Connected",
+            "SSE stream open · store " + storeId.slice(0, 8) + "…",
+          );
+        };
+      }
+
+      function disconnectSSE() {
+        if (S.sse) {
+          S.sse.close();
+          S.sse = null;
+        }
+        setBadge("disconnected", "Disconnected");
+      }
+
+      function setBadge(cls, text) {
+        const b = $("conn-badge");
+        b.className = "conn-badge " + cls;
+        $("conn-text").textContent = text;
+      }
+
+      // ── Event Feed ────────────────────────────────────────────────────────────────
+      const pendingRefresh = {};
+      function scheduleRefreshProducts() {
+        if (!pendingRefresh.products) {
+          pendingRefresh.products = setTimeout(() => {
+            refreshProducts();
+            delete pendingRefresh.products;
+          }, 1500);
+        }
+      }
+      function scheduleRefreshRels() {
+        if (!pendingRefresh.rels) {
+          pendingRefresh.rels = setTimeout(() => {
+            refreshRelationships();
+            delete pendingRefresh.rels;
+          }, 1500);
+        }
+      }
+      function scheduleRefreshInsights() {
+        if (!pendingRefresh.ins) {
+          pendingRefresh.ins = setTimeout(() => {
+            refreshInsights();
+            delete pendingRefresh.ins;
+          }, 1500);
+        }
+      }
+
+      function addEvent(cls, icon, type, detail, muted = false) {
+        const feed = $("event-feed");
+        // Remove "empty" placeholder
+        const empty = feed.querySelector(".empty");
+        if (empty) empty.remove();
+
+        const div = el("div", "event-item " + cls);
+        div.innerHTML =
+          '<span class="event-icon">' +
+          icon +
+          "</span>" +
+          '<div class="event-body">' +
+          '<div class="event-type">' +
+          type +
+          "</div>" +
+          '<div class="event-detail">' +
+          escHtml(detail) +
+          "</div>" +
+          '<div class="event-time">' +
+          ts() +
+          "</div>" +
+          "</div>";
+        feed.insertBefore(div, feed.firstChild);
+
+        // Keep max 150 events
+        S.eventCount++;
+        while (feed.children.length > 150) feed.removeChild(feed.lastChild);
+
+        // Auto-update last-update stamp
+        $("last-update").textContent = ts();
+      }
+
+      function clearFeed() {
+        $("event-feed").innerHTML =
+          '<div class="empty"><div class="empty-icon">📡</div>Feed cleared</div>';
+        S.eventCount = 0;
+      }
+
+      function escHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      // ── Bump a stat counter ───────────────────────────────────────────────────────
+      function bumpStat(id, delta, pending = false) {
+        const el = $(id);
+        const cur = parseInt(el.textContent) || 0;
+        el.textContent = cur + delta + (pending ? "+" : "");
+      }
+
+      // ── Render Snapshot ───────────────────────────────────────────────────────────
+      function renderSnapshot(d) {
+        if (d.products) renderProducts(d.products);
+        if (d.relationships) renderRelationships(d.relationships);
+        if (d.insights) renderInsights(d.insights);
+        if (d.health) renderHealth(d.health);
+      }
+
+      // ── Dashboard Refresh ─────────────────────────────────────────────────────────
+      async function refreshDashboard() {
+        if (!S.storeId) return;
+        await Promise.allSettled([
+          refreshProducts(),
+          refreshRelationships(),
+          refreshInsights(),
+          refreshHealth(),
+        ]);
+      }
+
+      async function refreshProducts() {
+        try {
+          const data = await api("GET", "/memory/products/" + S.storeId);
+          renderProducts(data.productExperience || {});
+        } catch (e) {
+          /* silent */
+        }
+      }
+
+      async function refreshRelationships() {
+        try {
+          const data = await api(
+            "GET",
+            "/memory/relationships/" + S.storeId + "?minStrength=0.10",
+          );
+          const flat = Object.values(data.relationships || {}).flat();
+          renderRelationships(flat);
+        } catch (e) {
+          /* silent */
+        }
+      }
+
+      async function refreshInsights() {
+        try {
+          const data = await api("GET", "/memory/insights/" + S.storeId);
+          const flat = Object.values(data.insights || {}).flat();
+          renderInsights(flat);
+        } catch (e) {
+          /* silent */
+        }
+      }
+
+      async function refreshHealth() {
+        try {
+          const data = await api("GET", "/memory/health/" + S.storeId);
+          renderHealth(data.memoryHealth);
+        } catch (e) {
+          /* silent */
+        }
+      }
+
+      // ── Render: Products ──────────────────────────────────────────────────────────
+      function renderProducts(products) {
+        const grid = $("product-grid");
+        const entries = Object.entries(products).sort(
+          ([, a], [, b]) => (b.confidence || 0) - (a.confidence || 0),
+        );
+
+        $("products-count").textContent = entries.length + " products";
+        $("stat-products").textContent = entries.length;
+
+        if (entries.length === 0) {
+          grid.innerHTML =
+            '<div class="empty"><div class="empty-icon">🧪</div>No product memory yet</div>';
+          $("stat-conf").textContent = "—";
+          return;
+        }
+
+        const avgConf =
+          entries.reduce((s, [, e]) => s + (e.confidence || 0), 0) /
+          entries.length;
+        $("stat-conf").textContent = pct(avgConf);
+
+        grid.innerHTML = "";
+        entries.slice(0, 60).forEach(([name, exp]) => {
+          const c = exp.confidence || 0;
+          const f = exp.frequency || 0;
+          const card = el("div", "product-card");
+          card.innerHTML =
+            '<div class="product-name">' +
+            "<span>" +
+            escHtml(name) +
+            "</span>" +
+            '<span class="freq-badge">×' +
+            f +
+            "</span>" +
+            "</div>" +
+            '<div class="product-meta">' +
+            (exp.performance_indicator
+              ? escHtml(exp.performance_indicator.replace(/_/g, " "))
+              : "") +
+            (exp.day_of_week ? " · " + escHtml(exp.day_of_week) : "") +
+            "</div>" +
+            '<div class="conf-bar-wrap">' +
+            '<div class="conf-bar-bg"><div class="conf-bar-fill" style="width:' +
+            pct(c) +
+            ";background:" +
+            confColor(c) +
+            '"></div></div>' +
+            '<span class="conf-val" style="color:' +
+            confColor(c) +
+            '">' +
+            pct(c) +
+            "</span>" +
+            "</div>";
+          grid.appendChild(card);
+        });
+        if (entries.length > 60) {
+          const more = el("div", "empty");
+          more.textContent = "+ " + (entries.length - 60) + " more products…";
+          grid.appendChild(more);
+        }
+      }
+
+      // ── Render: Relationships ─────────────────────────────────────────────────────
+      function renderRelationships(rels) {
+        const list = $("rel-list");
+        const sorted = [...rels].sort(
+          (a, b) => (b.strength || 0) - (a.strength || 0),
+        );
+
+        $("rels-count").textContent = sorted.length + " pairs";
+        $("stat-rels").textContent = sorted.length;
+
+        if (sorted.length === 0) {
+          list.innerHTML =
+            '<div class="empty"><div class="empty-icon">🔗</div>No relationships discovered yet</div>';
+          return;
+        }
+
+        list.innerHTML = "";
+        sorted.slice(0, 50).forEach((r) => {
+          const s = r.strength || 0;
+          const item = el("div", "rel-item");
+          item.innerHTML =
+            '<div class="rel-products">' +
+            '<span class="rel-p">' +
+            escHtml(r.product_a || "") +
+            "</span>" +
+            '<span class="rel-arrow">↔</span>' +
+            '<span class="rel-p">' +
+            escHtml(r.product_b || "") +
+            "</span>" +
+            "</div>" +
+            '<span class="rel-type">' +
+            escHtml((r.relationship_type || "").replace(/_/g, " ")) +
+            "</span>" +
+            '<div class="strength-bar"><div class="strength-fill" style="width:' +
+            pct(s) +
+            '"></div></div>' +
+            '<span class="rel-strength" style="color:' +
+            confColor(s) +
+            '">' +
+            pct(s) +
+            "</span>";
+          list.appendChild(item);
+        });
+      }
+
+      // ── Render: Insights ──────────────────────────────────────────────────────────
+      function renderInsights(insights) {
+        const grid = $("insight-grid");
+        const arr = Array.isArray(insights)
+          ? insights
+          : Object.values(insights).flat();
+        const sorted = [...arr].sort((a, b) => {
+          const oi = { high: 2, medium: 1, low: 0 };
+          return (
+            (oi[b.impact || "medium"] || 1) - (oi[a.impact || "medium"] || 1)
+          );
+        });
+
+        $("insights-count").textContent = sorted.length + " insights";
+        $("stat-insights").textContent = sorted.length;
+
+        if (sorted.length === 0) {
+          grid.innerHTML =
+            '<div class="empty"><div class="empty-icon">💡</div>No insights generated yet</div>';
+          return;
+        }
+
+        grid.innerHTML = "";
+        sorted.forEach((ins) => {
+          const impact = ins.impact || "medium";
+          const card = el("div", "insight-card " + impact);
+          card.innerHTML =
+            '<div class="insight-cat">' +
+            escHtml(
+              (ins.insight_category || ins.category || "").replace(/_/g, " "),
+            ) +
+            "</div>" +
+            '<div class="insight-title">' +
+            escHtml(ins.title || "") +
+            "</div>" +
+            '<div class="insight-desc">' +
+            escHtml(ins.description || "") +
+            "</div>" +
+            '<div class="insight-footer">' +
+            '<span class="impact-badge ' +
+            impact +
+            '">' +
+            impact.toUpperCase() +
+            "</span>" +
+            '<span style="font-size:.7rem;color:var(--muted);margin-left:auto">conf ' +
+            pct(ins.confidence) +
+            "</span>" +
+            "</div>";
+          grid.appendChild(card);
+        });
+      }
+
+      // ── Render: Health ────────────────────────────────────────────────────────────
+      function renderHealth(health) {
+        if (!health) return;
+        const cards = $("health-cards");
+        const badge = $("health-badge");
+
+        const items = Object.entries(health).filter(
+          ([k, v]) => typeof v !== "object" || v === null,
+        );
+        if (items.length === 0) {
+          cards.innerHTML =
+            '<div class="empty"><div class="empty-icon">🏥</div>Health data unavailable</div>';
+          return;
+        }
+
+        // Overall strength badge
+        const overall =
+          typeof health.overallStrength === "number"
+            ? Math.round(health.overallStrength * 100) + "%"
+            : health.isExperienced
+              ? "✓ Experienced"
+              : "—";
+        badge.textContent = overall;
+        badge.style.background =
+          health.overallStrength >= 0.5
+            ? "rgba(63,185,80,.15)"
+            : "rgba(248,81,73,.15)";
+        badge.style.color =
+          health.overallStrength >= 0.5 ? "var(--green)" : "var(--red)";
+
+        cards.innerHTML = "";
+        const display = [
+          [
+            "productMemoryEntries",
+            health.productMemoryEntries,
+            "Products in Memory",
+            "cv-blue",
+          ],
+          [
+            "relationshipEntries",
+            health.relationshipEntries,
+            "Relationship Pairs",
+            "cv-purple",
+          ],
+          [
+            "overallStrength",
+            health.overallStrength !== undefined
+              ? pct(health.overallStrength)
+              : "—",
+            "Memory Strength",
+            "cv-green",
+          ],
+          [
+            "isExperienced",
+            health.isExperienced ? "Yes ✓" : "Not Yet",
+            "Is Experienced",
+            "cv-orange",
+          ],
+        ];
+        display.forEach(([key, val, label, col]) => {
+          if (val === undefined) return;
+          const item = el("div", "health-item");
+          item.innerHTML =
+            '<div class="health-num ' +
+            col +
+            '">' +
+            escHtml(String(val)) +
+            "</div>" +
+            '<div class="health-lbl">' +
+            label +
+            "</div>";
+          cards.appendChild(item);
+        });
+
+        // Any extra numeric health keys
+        Object.entries(health).forEach(([k, v]) => {
+          if (
+            typeof v === "number" &&
+            ![
+              "productMemoryEntries",
+              "relationshipEntries",
+              "overallStrength",
+            ].includes(k)
+          ) {
+            const item = el("div", "health-item");
+            item.innerHTML =
+              '<div class="health-num">' +
+              (Number.isInteger(v) ? v : pct(v)) +
+              "</div>" +
+              '<div class="health-lbl">' +
+              escHtml(k.replace(/([A-Z])/g, " $1").trim()) +
+              "</div>";
+            cards.appendChild(item);
+          }
+        });
+      }
+
+      // ── Action Buttons ────────────────────────────────────────────────────────────
+      async function triggerLearn() {
+        if (!S.storeId) return;
+        try {
+          addEvent(
+            "ev-snapshot",
+            "⚡",
+            "Learn Triggered",
+            "Sending learn request…",
+          );
+          const data = await api("POST", "/memory/learn/" + S.storeId, {
+            days: 30,
+          });
+          const cnt = data.learning && data.learning.transactionsProcessed;
+          addEvent(
+            "ev-snapshot",
+            "✅",
+            "Learn Done",
+            "Processed " + (cnt || 0) + " transactions",
+          );
+          showToast("Learn complete: " + (cnt || 0) + " txns");
+          await refreshDashboard();
+        } catch (e) {
+          addEvent("ev-heartbeat", "❌", "Learn Failed", e.message);
+          showToast("Learn failed: " + e.message, false);
+        }
+      }
+
+      async function triggerInit() {
+        if (!S.storeId) return;
+        const force = confirm(
+          "Force-rebuild existing memory? Click OK to force, Cancel to skip if already initialized.",
+        );
+        try {
+          addEvent(
+            "ev-snapshot",
+            "🚀",
+            "Initialize Triggered",
+            "Building RAG memory from scratch…",
+          );
+          const data = await api("POST", "/memory/initialize/" + S.storeId, {
+            lookbackDays: 90,
+            force,
+          });
+          addEvent(
+            "ev-snapshot",
+            "✅",
+            "Initialize Done",
+            JSON.stringify(data.initialization || "").slice(0, 120),
+          );
+          showToast("Memory initialized");
+          await refreshDashboard();
+        } catch (e) {
+          addEvent("ev-heartbeat", "❌", "Initialize Failed", e.message);
+          showToast("Init failed: " + e.message, false);
+        }
+      }
+    </script>
+  </body>
+</html>

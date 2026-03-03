@@ -22,6 +22,17 @@ router.get('/insights', authenticate, async (req, res, next) => {
 // NOTE: POST /ai/insights/refresh intentionally removed.
 // AI refresh is driven by the backend scheduler and the ledger-entry hook only.
 
+// ── POST /ai/insights/force-refresh — DEV/TEST only ──────────────────────────
+// Deletes existing insights and immediately triggers a fresh AI run.
+router.post('/insights/force-refresh', authenticate, async (req, res, next) => {
+    try {
+        const { storeId, storeType } = req.query;
+        if (!storeId) return res.status(400).json({ error: 'storeId query param required' });
+        await svc.forceRefreshInsights(req.user.userId, storeId, storeType || 'general');
+        res.json({ message: 'Force refresh triggered — insights regenerating in background' });
+    } catch (e) { next(e); }
+});
+
 // ── GET /ai/jobs/:id — kept for OCR bill processing ──────────────────────────
 router.get('/jobs/:id', authenticate, async (req, res, next) => {
     try {

@@ -18,6 +18,9 @@ const uploadDir = path.resolve(env.uploadDir);
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
 
+// Serve the RAG Memory dashboard at /dashboard
+app.use('/dashboard', express.static(path.join(__dirname, '../dashboard')));
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/auth', require('./auth/routes'));
 app.use('/stores', require('./stores/routes'));
@@ -25,6 +28,7 @@ app.use('/bills', require('./bills/routes'));
 app.use('/ledger', require('./ledger/routes'));
 app.use('/analytics', require('./analytics/routes'));
 app.use('/ai', require('./ai/routes'));
+app.use('/memory', require('./ai/ragMemoryRoutes')); // RAG-driven shop intelligence
 app.use('/stocks', require('./stocks/routes'));
 app.use('/order-items', require('./order_items/routes'));
 

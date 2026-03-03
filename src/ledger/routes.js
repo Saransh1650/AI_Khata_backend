@@ -3,6 +3,7 @@ const router = require('express').Router();
 const { authenticate } = require('../auth/middleware');
 const svc = require('./service');
 const aiSvc = require('../ai/service');
+const { learnFromNewTransaction } = require('../ai/transactionLearner');
 
 router.get('/entries', authenticate, async (req, res, next) => {
     try {
@@ -17,6 +18,13 @@ router.post('/entries', authenticate, async (req, res, next) => {
         const { storeId, merchant, transaction_date, total_amount, notes, lineItems } = req.body;
         if (!transaction_date || !total_amount) return res.status(400).json({ error: 'transaction_date and total_amount required' });
         const entry = await svc.createEntry(req.user.userId, storeId, { merchant, transaction_date, total_amount, notes, lineItems });
+
+        // Non-blocking: learn from new transaction for RAG memory
+        if (entry && entry.id) {
+            learnFromNewTransaction(entry.id).catch(err => {
+                console.error('[Ledger] RAG learning failed:', err.message);
+            });
+        }
 
         // Non-blocking: check if 20+ new bills have accumulated to justify a fresh AI run.
         // AI is never triggered from the advice page — only here or the scheduler.
