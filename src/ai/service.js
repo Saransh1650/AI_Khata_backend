@@ -173,7 +173,7 @@ function enrichGuidanceWithLiveStock(guidance, stockMap) {
  * Dispatches the refreshInsights worker for a store.
  * Skips if a refresh is already running for this store.
  */
-function triggerInsightsRefresh(userId, storeId, storeType) {
+function triggerInsightsRefresh(userId, storeId, storeType, overrideOccasion) {
     if (refreshInFlight.has(storeId)) {
         console.log(`[AI] Refresh already in progress for store ${storeId}, skipping`);
         return;
@@ -183,11 +183,12 @@ function triggerInsightsRefresh(userId, storeId, storeType) {
         userId,
         storeId,
         storeType: storeType || 'general',
+        overrideOccasion: overrideOccasion || null,
     });
     worker.on('message', () => refreshInFlight.delete(storeId));
     worker.on('error', () => refreshInFlight.delete(storeId));
     worker.on('exit', () => refreshInFlight.delete(storeId));
-    console.log(`[AI] Refresh triggered for store ${storeId}`);
+    console.log(`[AI] Refresh triggered for store ${storeId}${overrideOccasion ? ` (demo occasion: ${overrideOccasion.name})` : ''}`);
 }
 
 /**
@@ -293,14 +294,14 @@ async function startInsightsScheduler() {
  * Force-deletes existing insights for a store and immediately triggers a fresh AI run.
  * For testing/dev use only.
  */
-async function forceRefreshInsights(userId, storeId, storeType) {
+async function forceRefreshInsights(userId, storeId, storeType, overrideOccasion) {
     await pool.query(
         'DELETE FROM ai_insights WHERE store_id=$1',
         [storeId]
     );
     // Remove from in-flight guard so it can run immediately
     refreshInFlight.delete(storeId);
-    triggerInsightsRefresh(userId, storeId, storeType || 'general');
+    triggerInsightsRefresh(userId, storeId, storeType || 'general', overrideOccasion || null);
 }
 
 module.exports = {

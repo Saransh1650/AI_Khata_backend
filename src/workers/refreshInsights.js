@@ -12,7 +12,7 @@
  *  • No numerical predictions (no sales numbers, percentages, revenue).
  *  • Qualitative reasoning only — practical, shopkeeper-friendly advice.
  *
- * workerData: { storeId, userId, storeType }
+ * workerData: { storeId, userId, storeType, overrideOccasion? }
  */
 const { workerData, parentPort } = require('worker_threads');
 const pool = require('../config/database');
@@ -21,7 +21,7 @@ const { generateExperienceGuidance } = require('../ai/experienceEngine');
 const { learnFromTransaction } = require('../ai/shopMemory');
 const { discoverProductRelationships } = require('../ai/relationshipIntelligence');
 
-const { storeId, userId, storeType = 'general' } = workerData;
+const { storeId, userId, storeType = 'general', overrideOccasion = null } = workerData;
 
 // ── Data Gathering ──────────────────────────────────────────────────────────
 
@@ -205,7 +205,10 @@ async function run() {
             getRecentSales(),
             getShopActivity(),
         ]);
-        const upcomingFestival = getClosestFestival();
+        const upcomingFestival = overrideOccasion ?? getClosestFestival();
+        if (overrideOccasion) {
+            console.log(`[refreshInsights] Using demo occasion override: ${overrideOccasion.name} (${overrideOccasion.daysAway} days away)`);
+        }
 
         const input = {
             storeType,

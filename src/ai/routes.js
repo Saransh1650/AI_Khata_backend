@@ -24,11 +24,15 @@ router.get('/insights', authenticate, async (req, res, next) => {
 
 // ── POST /ai/insights/force-refresh — DEV/TEST only ──────────────────────────
 // Deletes existing insights and immediately triggers a fresh AI run.
+// Optional: occasionName + occasionDaysAway query params override the festival calendar for demo.
 router.post('/insights/force-refresh', authenticate, async (req, res, next) => {
     try {
-        const { storeId, storeType } = req.query;
+        const { storeId, storeType, occasionName, occasionDaysAway } = req.query;
         if (!storeId) return res.status(400).json({ error: 'storeId query param required' });
-        await svc.forceRefreshInsights(req.user.userId, storeId, storeType || 'general');
+        const overrideOccasion = occasionName
+            ? { name: occasionName, daysAway: parseInt(occasionDaysAway) || 3 }
+            : null;
+        await svc.forceRefreshInsights(req.user.userId, storeId, storeType || 'general', overrideOccasion);
         res.json({ message: 'Force refresh triggered — insights regenerating in background' });
     } catch (e) { next(e); }
 });
