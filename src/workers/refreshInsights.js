@@ -16,7 +16,6 @@
  */
 const { workerData, parentPort } = require('worker_threads');
 const pool = require('../config/database');
-const { getUpcomingFestivals } = require('../ai/festivalCalendar');
 const { generateExperienceGuidance } = require('../ai/experienceEngine');
 const { learnFromTransaction } = require('../ai/shopMemory');
 const { discoverProductRelationships } = require('../ai/relationshipIntelligence');
@@ -113,14 +112,6 @@ async function getShopActivity() {
     return { recentBusiness, busyDays: busyRows.map(r => r.day_name) };
 }
 
-function getClosestFestival() {
-    const festivals = getUpcomingFestivals(45, storeType);
-    if (!festivals.length) return null;
-    const closest = festivals.reduce((a, b) => (a.date < b.date ? a : b));
-    const daysAway = Math.ceil((closest.date - new Date()) / 86400000);
-    return { name: closest.name, daysAway };
-}
-
 // ── Upsert ──────────────────────────────────────────────────────────────────
 
 async function upsertInsight(type, data, ledgerCount) {
@@ -205,9 +196,10 @@ async function run() {
             getRecentSales(),
             getShopActivity(),
         ]);
-        const upcomingFestival = overrideOccasion ?? getClosestFestival();
-        if (overrideOccasion) {
-            console.log(`[refreshInsights] Using demo occasion override: ${overrideOccasion.name} (${overrideOccasion.daysAway} days away)`);
+        // Festival is always user-provided via the app's occasion picker (no calendar auto-detection)
+        const upcomingFestival = overrideOccasion ?? null;
+        if (upcomingFestival) {
+            console.log(`[refreshInsights] Festival occasion provided: ${upcomingFestival.name} (${upcomingFestival.daysAway} days away)`);
         }
 
         const input = {

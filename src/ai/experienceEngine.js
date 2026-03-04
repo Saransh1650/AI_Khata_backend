@@ -37,7 +37,7 @@ async function generateExperienceGuidance(storeId, storeType, input) {
     const inventoryContext = analyzeInventoryState(input.inventory, shopMemory);
     
     // Synthesize all intelligence into experience-driven guidance
-    return synthesizeExperienceGuidance({
+    return await synthesizeExperienceGuidance({
         shopMemory,
         salesExpansion,
         contextualGuidance,
@@ -59,11 +59,11 @@ async function generateContextualIntelligence(storeId, input) {
         festivalIntelligence: null
     };
     
-    // Festival context (only if within 10 days)
-    if (input.upcomingFestival && input.upcomingFestival.daysAway <= 10) {
+    // Festival context — user explicitly selected this festival via the app
+    if (input.upcomingFestival) {
         context.festivalIntelligence = await getFestivalRelationshipGuidance(
-            storeId, 
-            input.upcomingFestival.name, 
+            storeId,
+            input.upcomingFestival.name,
             input.upcomingFestival.daysAway
         );
     }
@@ -288,7 +288,7 @@ function buildDeadStockCard(inventory, recentSales, salesExpansion) {
 /**
  * Synthesize all intelligence into coherent experience-driven guidance
  */
-function synthesizeExperienceGuidance(intelligence) {
+async function synthesizeExperienceGuidance(intelligence) {
     const {
         shopMemory,
         salesExpansion,
@@ -297,9 +297,9 @@ function synthesizeExperienceGuidance(intelligence) {
         input,
         storeType
     } = intelligence;
-    
+
     const guidance = {
-        mode: input.upcomingFestival?.daysAway <= 10 ? 'EXPERIENCE_EVENT' : 'EXPERIENCE_NORMAL',
+        mode: input.upcomingFestival ? 'EXPERIENCE_EVENT' : 'EXPERIENCE_NORMAL',
         philosophy: 'experience_driven',
         guidance: []
     };
@@ -310,12 +310,12 @@ function synthesizeExperienceGuidance(intelligence) {
         guidance.guidance.push(stockCard);
     }
 
-    // 1. DEAD STOCK — items not moving, suggest swaps (replaces strength_amplification)
+    // 1. DEAD STOCK — items not moving, suggest swaps
     const deadStockCard = buildDeadStockCard(input.inventory, input.recentSales, salesExpansion);
     if (deadStockCard) {
         guidance.guidance.push(deadStockCard);
     }
-    
+
     // 2. EXPANSION SUGGESTIONS (Product relationships - MOST IMPORTANT)
     if (salesExpansion.crossSellOpportunities.length > 0 || salesExpansion.missingComplementary.length > 0) {
         guidance.guidance.push({
@@ -326,7 +326,7 @@ function synthesizeExperienceGuidance(intelligence) {
             strategy: 'Increase basket size through proven product relationships'
         });
     }
-    
+
     // 3. EXPERIENCE-DRIVEN PATTERNS (current context with memory)
     if (contextualGuidance.trendAnalysis.opportunityProducts.length > 0) {
         guidance.guidance.push({
@@ -336,21 +336,20 @@ function synthesizeExperienceGuidance(intelligence) {
             products: contextualGuidance.trendAnalysis.opportunityProducts
         });
     }
-    
-    // 4. FESTIVAL CONTEXT (only if within 10 days AND memory supports it)
-    if (input.upcomingFestival?.daysAway <= 10) {
-        const festivalGuidance = synthesizeFestivalGuidance(
+
+    // 4. FESTIVAL CONTEXT — user explicitly selected this occasion via the app
+    if (input.upcomingFestival) {
+        const festivalGuidance = await synthesizeFestivalGuidance(
             input.upcomingFestival,
             contextualGuidance.festivalIntelligence,
             shopMemory,
             input.inventory
         );
-        
         if (festivalGuidance) {
             guidance.guidance.push(festivalGuidance);
         }
     }
-    
+
     // 5. SHOP INTELLIGENCE SUMMARY (high-level insights)
     guidance.guidance.push({
         type: 'shop_intelligence',
@@ -359,7 +358,7 @@ function synthesizeExperienceGuidance(intelligence) {
         businessMomentum: contextualGuidance.businessRhythm.momentum,
         nextActions: getNextIntelligenceActions(intelligence)
     });
-    
+
     return guidance;
 }
 
@@ -426,30 +425,37 @@ function synthesizeMomentumInsight(trendAnalysis, shopMemory) {
 /**
  * Synthesize festival guidance with memory validation
  */
-function synthesizeFestivalGuidance(festival, festivalIntelligence, shopMemory, inventory) {
+async function synthesizeFestivalGuidance(festival, festivalIntelligence, shopMemory, inventory) {
     const festivalName = festival.name;
     const daysAway = festival.daysAway;
-    
-    // Check if shop has historical festival experience
+
+    // Check if shop has historical seasonal purchase memory for this festival
     const hasSeasonalMemory = festivalIntelligence && festivalIntelligence.length > 0;
-    
+
     if (!hasSeasonalMemory) {
-        // No festival memory - suggest based on shop strengths + festival context
+        // No DB memory — ask AI to analyze inventory against festival context
+        const { items, suggestedNewItems } = await synthesizeFestivalFromStrengths(
+            shopMemory.strengthBased, festivalName, inventory
+        );
+
+        if (!items.length && !suggestedNewItems.length) return null;
+
         return {
             type: 'festival_preparation',
             event: festivalName,
-            summary: `${festivalName} is ${daysAway} days away - prepare based on your shop strengths`,
-            strategy: 'strength_amplification',
-            items: synthesizeFestivalFromStrengths(shopMemory.strengthBased, festivalName, inventory),
-            experienceNote: 'First time festival approach - building on your existing strengths'
+            summary: `${festivalName} is ${daysAway} days away — here’s what to prepare`,
+            strategy: 'ai_guided',
+            items,
+            suggestedNewItems,
+            experienceNote: 'AI-analyzed based on your live inventory and festival context',
         };
     }
-    
-    // Has festival memory - use learned experience
+
+    // Has seasonal memory — use learned purchase history
     return {
         type: 'festival_experience',
         event: festivalName,
-        summary: `${festivalName} is ${daysAway} days away - based on your shop's ${festivalName} experience`,
+        summary: `${festivalName} is ${daysAway} days away — based on your shop’s past ${festivalName} experience`,
         strategy: 'memory_guided',
         items: festivalIntelligence.map(rel => ({
             product: rel.productA,
@@ -457,50 +463,90 @@ function synthesizeFestivalGuidance(festival, festivalIntelligence, shopMemory, 
             urgency: rel.urgency,
             demandNote: rel.demandNote,
             experienceStrength: rel.strength,
-            classification: 'memory_validated'
+            classification: 'memory_validated',
         })),
-        experienceNote: `Using learned patterns from your shop's ${festivalName} history`
+        experienceNote: `Driven by your shop’s learned ${festivalName} purchase patterns`,
     };
 }
 
 /**
- * Synthesize festival guidance from shop strengths when no festival memory exists
+ * Synthesize festival preparation guidance using AI — fully dynamic, no hardcoded festival data.
+ * Sends the store's actual inventory + festival name to Gemini and parses its response.
  */
-function synthesizeFestivalFromStrengths(strengthProducts, festivalName, inventory) {
-    // Map festival types to categories of products
-    const festivalCategories = {
-        'Diwali': ['sweets', 'oil', 'ghee', 'dry fruits', 'sugar', 'milk'],
-        'Holi': ['milk', 'sugar', 'colors', 'sweets', 'snacks'],
-        'Ganesh Chaturthi': ['modak', 'coconut', 'jaggery', 'rice', 'flowers'],
-        'Eid': ['dates', 'milk', 'vermicelli', 'dry fruits', 'meat']
-    };
-    
-    const relevantCategories = festivalCategories[festivalName] || [];
-    const festivalItems = [];
-    
-    for (const strengthProduct of strengthProducts) {
-        const productLower = strengthProduct.product.toLowerCase();
-        const isRelevant = relevantCategories.some(category => 
-            productLower.includes(category) || category.includes(productLower)
-        );
-        
-        if (isRelevant) {
-            const currentStock = inventory.find(item => 
-                item.product.toLowerCase() === productLower
-            );
-            
-            festivalItems.push({
-                product: strengthProduct.product,
-                urgency: currentStock?.quantity < 5 ? 'high' : 'moderate',
-                reason: `${strengthProduct.product} is both a shop strength and ${festivalName} essential`,
-                action: `Stock extra ${strengthProduct.product} - combines your expertise with festival demand`,
-                classification: 'strength_festival_match',
-                memoryStrength: strengthProduct.confidence
-            });
-        }
+async function synthesizeFestivalFromStrengths(strengthProducts, festivalName, inventory) {
+    const inventoryList = inventory
+        .map(i => `${i.product} (stock: ${i.quantity} ${i.unit || 'units'})`)
+        .join('\n');
+    const topProducts = strengthProducts.slice(0, 10).map(s => s.product).join(', ');
+
+    const prompt = `You are an AI advisor for an Indian kirana/retail shop owner.
+Festival: ${festivalName}
+
+Shop's current inventory:
+${inventoryList}
+
+Shop's best-selling products: ${topProducts || 'Not yet tracked'}
+
+Task: Based on the traditions, customs, and typical shopping patterns for "${festivalName}" in India:
+1. Identify which products from the current inventory will see increased demand.
+2. Suggest 2-4 items NOT in inventory that this shop should consider stocking for the festival.
+
+Return ONLY a valid JSON object with this exact structure:
+{
+  "festivalItems": [
+    {
+      "product": "<exact product name as listed in inventory above>",
+      "urgency": "high|moderate|low",
+      "reason": "<specific reason this item is needed for ${festivalName}>",
+      "action": "<practical, actionable advice for the shopkeeper>"
     }
-    
-    return festivalItems;
+  ],
+  "suggestedNewItems": [
+    {
+      "product": "<product name>",
+      "reason": "<why it would sell well during ${festivalName}>"
+    }
+  ]
+}
+
+Rules:
+- festivalItems MUST only use exact product names copied from the inventory list above.
+- Include only products genuinely relevant to ${festivalName} — skip irrelevant ones.
+- suggestedNewItems should be items NOT in the inventory list.
+- Be specific to ${festivalName} traditions, not generic advice.`;
+
+    try {
+        const result = await callGemini(prompt);
+
+        // Build a case-insensitive lookup map for validation
+        const inventoryMap = {};
+        for (const item of inventory) {
+            inventoryMap[item.product.toLowerCase()] = item;
+        }
+
+        // Validate festivalItems against real inventory (discard hallucinated product names)
+        const validatedItems = (result.festivalItems || [])
+            .filter(item => item.product && inventoryMap[item.product.toLowerCase()])
+            .map(item => {
+                const invItem = inventoryMap[item.product.toLowerCase()];
+                return {
+                    product: invItem.product,  // exact casing from DB
+                    urgency: invItem.quantity < 5 ? 'high' : (item.urgency || 'moderate'),
+                    reason: item.reason,
+                    action: item.action,
+                    currentStock: invItem.quantity,
+                    classification: 'ai_festival_match',
+                };
+            });
+
+        return {
+            items: validatedItems,
+            suggestedNewItems: (result.suggestedNewItems || []).slice(0, 4),
+        };
+    } catch (e) {
+        console.error('[ExperienceEngine] Festival AI synthesis failed:', e.message);
+        return { items: [], suggestedNewItems: [] };
+    }
 }
 
 /**
