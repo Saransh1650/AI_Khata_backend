@@ -8,7 +8,7 @@ const { syncStockAfterBill } = require('../utils/stockSync');
 async function uploadBill(userId, storeId, file) {
     const imageUrl = `/uploads/${file.filename}`;
     const { rows: [bill] } = await pool.query(
-        'INSERT INTO bills(user_id, store_id, image_url, source, status) VALUES($1,$2,$3,$2,$4) RETURNING *',
+        'INSERT INTO bills(user_id, store_id, image_url, source, status) VALUES($1,$2,$3,$4,$5) RETURNING *',
         [userId, storeId, imageUrl, 'ocr', 'UPLOADED']
     );
 

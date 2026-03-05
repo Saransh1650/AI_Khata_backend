@@ -1,7 +1,7 @@
 'use strict';
 const { workerData, parentPort } = require('worker_threads');
 const pool = require('../config/database');
-const { callGemini } = require('../config/gemini');
+const { callBedrock } = require('../config/bedrock');
 
 async function run() {
     const { jobId, userId, storeId, storeType = 'general' } = workerData;
@@ -51,7 +51,7 @@ Return ONLY valid JSON:
 }
 Only include products with genuine stockout risk. If all look fine, return empty alerts array.`;
 
-        const result = await callGemini(prompt);
+        const result = await callBedrock(prompt);
 
         await pool.query('INSERT INTO ai_results(job_id,data) VALUES($1,$2)', [jobId, result]);
         await pool.query("UPDATE ai_jobs SET status='COMPLETED', completed_at=NOW() WHERE id=$1", [jobId]);

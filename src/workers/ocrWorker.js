@@ -2,7 +2,7 @@
 const { workerData, parentPort } = require('worker_threads');
 const fs = require('fs');
 const pool = require('../config/database');
-const { callGemini } = require('../config/gemini');
+const { callBedrock } = require('../config/bedrock');
 const { syncStockAfterBill } = require('../utils/stockSync');
 
 async function run() {
@@ -34,7 +34,7 @@ Rules:
 - unit should be the item's unit of measure (kg, pcs, L, dozen, etc.). Use "units" if not specified.
 - Do not include any text outside the JSON.`;
 
-        const extracted = await callGemini(prompt, imagePart);
+        const extracted = await callBedrock(prompt, imagePart);
 
         // Fetch bill
         const { rows: [bill] } = await pool.query('SELECT * FROM bills WHERE id=$1', [billId]);

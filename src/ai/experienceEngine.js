@@ -14,7 +14,7 @@
  */
 const { generateMemoryBasedRecommendations, getProductExperience, getExperienceInsights } = require('./shopMemory');
 const { generateSalesExpansionGuidance, getFestivalRelationshipGuidance } = require('./relationshipIntelligence');
-const { callGemini } = require('../config/gemini');
+const { callBedrock } = require('../config/bedrock');
 
 // ── Core Guidance Philosophy ───────────────────────────────────────────────
 
@@ -516,7 +516,7 @@ Rules:
 - Be specific to ${festivalName} traditions, not generic advice.`;
 
     try {
-        const result = await callGemini(prompt);
+        const result = await callBedrock(prompt);
 
         // Build a case-insensitive lookup map for validation
         const inventoryMap = {};
