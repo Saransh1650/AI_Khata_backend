@@ -368,14 +368,16 @@ async function run() {
         log('  Seeding testuser_rag_demo', bold);
         log('════════════════════════════════════════════════', cyan);
 
-        // ── 1. Fix password hash ────────────────────────────────────────────
-        log('\n🔐 Fixing password hash...', blue);
+        // ── 1. Upsert user (create if not exists, fix password if exists) ──────
+        log('\n👤 Creating / resetting user...', blue);
         const hash = await bcrypt.hash(PASSWORD, 10);
         await pool.query(
-            'UPDATE users SET password_hash = $1 WHERE id = $2',
-            [hash, USER_ID]
+            `INSERT INTO users (id, name, password_hash)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (id) DO UPDATE SET password_hash = $3`,
+            [USER_ID, USER_NAME, hash]
         );
-        log(`  ✅ Password updated for ${USER_NAME} (hash: ${hash.substring(0, 20)}...)`, green);
+        log(`  ✅ Upserted user ${USER_NAME} (hash: ${hash.substring(0, 20)}...)`, green);
 
         // ── 2. Ensure store exists ──────────────────────────────────────────
         log('\n🏪 Checking store...', blue);

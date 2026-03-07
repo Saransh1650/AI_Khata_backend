@@ -36,7 +36,8 @@ services:
       POSTGRES_DB: ai_khata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./src/config/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./src/config/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./src/config/rag_memory.sql:/docker-entrypoint-initdb.d/02_rag_memory.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d ai_khata"]
       interval: 5s
