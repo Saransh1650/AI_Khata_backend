@@ -471,7 +471,8 @@ async function synthesizeFestivalGuidance(festival, festivalIntelligence, shopMe
 
 /**
  * Synthesize festival preparation guidance using AI — fully dynamic, no hardcoded festival data.
- * Sends the store's actual inventory + festival name to Gemini and parses its response.
+ * AI freely recommends everything relevant to the festival; we then classify each item as
+ * "stock up" (already in inventory) or "source this" (not yet stocked).
  */
 async function synthesizeFestivalFromStrengths(strengthProducts, festivalName, inventory) {
     const inventoryList = inventory
@@ -479,70 +480,107 @@ async function synthesizeFestivalFromStrengths(strengthProducts, festivalName, i
         .join('\n');
     const topProducts = strengthProducts.slice(0, 10).map(s => s.product).join(', ');
 
-    const prompt = `You are an AI advisor for an Indian kirana/retail shop owner.
-Festival: ${festivalName}
+    const prompt = `You are an AI advisor for an Indian kirana/retail shop owner preparing for ${festivalName}.
 
 Shop's current inventory:
-${inventoryList}
+${inventoryList || '(no inventory listed)'}
 
 Shop's best-selling products: ${topProducts || 'Not yet tracked'}
 
-Task: Based on the traditions, customs, and typical shopping patterns for "${festivalName}" in India:
-1. Identify which products from the current inventory will see increased demand.
-2. Suggest 2-4 items NOT in inventory that this shop should consider stocking for the festival.
+Task: Recommend ALL products that customers typically buy during ${festivalName} in India.
+Think freely — DO NOT restrict yourself to what the shop currently stocks.
+Cover both: items already in stock that will see a demand spike AND new festival-specific items the shop should source.
 
-Return ONLY a valid JSON object with this exact structure:
+Typical categories to consider for Indian festivals: sweets/mithai ingredients, puja/pooja items (agarbatti, camphor, diya), gifting items, dry fruits, special staples (ghee, atta, rice), beverages, decorations, clothing essentials, seasonal snacks.
+
+Return ONLY a valid JSON object:
 {
-  "festivalItems": [
-    {
-      "product": "<exact product name as listed in inventory above>",
-      "urgency": "high|moderate|low",
-      "reason": "<specific reason this item is needed for ${festivalName}>",
-      "action": "<practical, actionable advice for the shopkeeper>"
-    }
-  ],
-  "suggestedNewItems": [
+  "festivalRecommendations": [
     {
       "product": "<product name>",
-      "reason": "<why it would sell well during ${festivalName}>"
+      "urgency": "high|moderate|low",
+      "reason": "<specific reason this sells during ${festivalName}>",
+      "action": "<practical shopkeeper advice>"
     }
   ]
 }
 
 Rules:
-- festivalItems MUST only use exact product names copied from the inventory list above.
-- Include only products genuinely relevant to ${festivalName} — skip irrelevant ones.
-- suggestedNewItems should be items NOT in the inventory list.
-- Be specific to ${festivalName} traditions, not generic advice.`;
+- Suggest 8–14 items that are genuinely demanded during ${festivalName}.
+- Be specific to ${festivalName} customs and traditions — not generic grocery advice.
+- Include both festival-specific items (e.g. Ghee, Besan, Dry Fruits, Diyas for Diwali) AND regular staples that spike in demand.
+- Do NOT skip an item just because it isn't in the current inventory — that is the whole point.`;
 
     try {
         const result = await callBedrock(prompt);
 
-        // Build a case-insensitive lookup map for validation
+        // Build a case-insensitive fuzzy lookup map for current inventory
         const inventoryMap = {};
         for (const item of inventory) {
             inventoryMap[item.product.toLowerCase()] = item;
         }
 
-        // Validate festivalItems against real inventory (discard hallucinated product names)
-        const validatedItems = (result.festivalItems || [])
-            .filter(item => item.product && inventoryMap[item.product.toLowerCase()])
-            .map(item => {
-                const invItem = inventoryMap[item.product.toLowerCase()];
-                return {
-                    product: invItem.product,  // exact casing from DB
-                    urgency: invItem.quantity < 5 ? 'high' : (item.urgency || 'moderate'),
-                    reason: item.reason,
-                    action: item.action,
+        /**
+         * Fuzzy match: "Sugar" → "Sugar 1kg", "Milk" → "Milk 1L", "Rice" → "Basmati Rice 5kg"
+         * Strips trailing quantity qualifiers before comparing.
+         */
+        function findInventoryMatch(aiProductName) {
+            const aiKey = aiProductName.toLowerCase().trim();
+            // 1. Exact match
+            if (inventoryMap[aiKey]) return inventoryMap[aiKey];
+            // Strip trailing size/quantity: "1kg", "500ml", "(6 pcs)", "50g"
+            const strip = s => s.replace(/\s+[\d(].*$/, '').trim();
+            const strippedAi = strip(aiKey);
+            // 2. One is a prefix of the other with a space separator
+            for (const [invKey, invItem] of Object.entries(inventoryMap)) {
+                if (invKey.startsWith(aiKey + ' ') || aiKey.startsWith(invKey + ' ')) return invItem;
+            }
+            // 3. Match base names (both stripped)
+            for (const [invKey, invItem] of Object.entries(inventoryMap)) {
+                if (strip(invKey) === strippedAi && strippedAi.length >= 3) return invItem;
+            }
+            return null;
+        }
+
+        const seen = new Set();
+        const items = [];
+
+        for (const rec of (result.festivalRecommendations || [])) {
+            if (!rec.product) continue;
+            const dedupeKey = rec.product.toLowerCase().trim();
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+
+            const invItem = findInventoryMatch(rec.product);
+            if (invItem) {
+                // Already in inventory — tell shopkeeper to stock up
+                items.push({
+                    product: invItem.product,   // exact casing from DB
+                    urgency: invItem.quantity < 5 ? 'high' : (rec.urgency || 'moderate'),
+                    reason: rec.reason,
+                    action: rec.action,
                     currentStock: invItem.quantity,
                     classification: 'ai_festival_match',
-                };
-            });
+                });
+            } else {
+                // NOT in inventory — opportunity to source before the festival
+                items.push({
+                    product: rec.product,
+                    urgency: rec.urgency || 'moderate',
+                    reason: rec.reason,
+                    action: rec.action || `Source before ${festivalName} — customers will specifically look for this`,
+                    currentStock: 0,
+                    classification: 'opportunity',
+                });
+            }
+        }
 
-        return {
-            items: validatedItems,
-            suggestedNewItems: (result.suggestedNewItems || []).slice(0, 4),
-        };
+        // Backwards-compat: keep suggestedNewItems populated for any callers
+        const suggestedNewItems = items
+            .filter(i => i.classification === 'opportunity')
+            .map(i => ({ product: i.product, reason: i.reason }));
+
+        return { items, suggestedNewItems };
     } catch (e) {
         console.error('[ExperienceEngine] Festival AI synthesis failed:', e.message);
         return { items: [], suggestedNewItems: [] };

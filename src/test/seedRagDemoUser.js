@@ -338,21 +338,35 @@ const TRANSACTIONS = [
 
 // ── Stock items (current inventory) ──────────────────────────────────────────
 const STOCK_ITEMS = [
+    // ── Dairy & Breakfast ─────────────────────────────────────────────────────
     { product_name: 'Milk 1L',            quantity: 8,  unit: 'pcs' },
     { product_name: 'Bread',              quantity: 5,  unit: 'pcs' },
     { product_name: 'Butter',             quantity: 4,  unit: 'pcs' },
     { product_name: 'Curd 400g',          quantity: 6,  unit: 'pcs' },
     { product_name: 'Eggs (6 pcs)',        quantity: 3,  unit: 'pcs' },
+    // ── Beverages ─────────────────────────────────────────────────────────────
     { product_name: 'Tea 250g',           quantity: 7,  unit: 'pcs' },
     { product_name: 'Sugar 1kg',          quantity: 5,  unit: 'pcs' },
+    // ── Staples ───────────────────────────────────────────────────────────────
     { product_name: 'Basmati Rice 5kg',   quantity: 12, unit: 'pcs' },
     { product_name: 'Toor Dal 1kg',       quantity: 4,  unit: 'pcs' },
     { product_name: 'Moong Dal 1kg',      quantity: 3,  unit: 'pcs' },
     { product_name: 'Chana Dal 1kg',      quantity: 2,  unit: 'pcs' },
+    { product_name: 'Poha 500g',          quantity: 5,  unit: 'pcs' },
+    { product_name: 'Besan 500g',         quantity: 3,  unit: 'pcs' },
+    { product_name: 'Rawa 500g',          quantity: 4,  unit: 'pcs' },
+    // ── Oils & Spices ─────────────────────────────────────────────────────────
     { product_name: 'Mustard Oil 1L',     quantity: 6,  unit: 'pcs' },
     { product_name: 'Sunflower Oil 1L',   quantity: 4,  unit: 'pcs' },
+    { product_name: 'Ghee 500ml',         quantity: 3,  unit: 'pcs' },
     { product_name: 'Turmeric 100g',      quantity: 8,  unit: 'pcs' },
     { product_name: 'Red Chilli Powder 100g', quantity: 5, unit: 'pcs' },
+    // ── Festival & Puja ───────────────────────────────────────────────────────
+    { product_name: 'Dry Fruits Mix 200g',quantity: 4,  unit: 'pcs' },
+    { product_name: 'Coconut',            quantity: 6,  unit: 'pcs' },
+    { product_name: 'Agarbatti Pack',     quantity: 8,  unit: 'pcs' },
+    { product_name: 'Camphor Tablet',     quantity: 10, unit: 'pcs' },
+    // ── Snacks & Drinks ───────────────────────────────────────────────────────
     { product_name: 'Lays Chips 50g',     quantity: 15, unit: 'pcs' },
     { product_name: 'Kurkure 45g',        quantity: 10, unit: 'pcs' },
     { product_name: 'Pepsi 1.25L',        quantity: 12, unit: 'pcs' },
