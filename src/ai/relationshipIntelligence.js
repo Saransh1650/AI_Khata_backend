@@ -394,44 +394,30 @@ async function getStrongRelationships(storeId, minStrength = 0.30) {
 // ── Festival Context Intelligence ──────────────────────────────────────────
 
 /**
- * Adapt product relationships for festival context
+ * Get festival-specific seasonal pair relationships from DB memory.
+ * Only returns rows explicitly tagged with this festival name — never
+ * falls back to generic strong relationships (those are not festival knowledge).
  */
 async function getFestivalRelationshipGuidance(storeId, festivalName, daysUntilFestival) {
-    const seasonalRelationships = await pool.query(`
+    const { rows } = await pool.query(`
         SELECT product_a, product_b, relationship_type, strength, occurrences, context
-        FROM product_relationships 
-        WHERE store_id = $1 
+        FROM product_relationships
+        WHERE store_id = $1
             AND relationship_type = 'seasonal_pair'
-            AND (context ILIKE '%' || $2 || '%' OR context ILIKE '%Season%')
+            AND context ILIKE '%' || $2 || '%'
         ORDER BY strength DESC
+        LIMIT 10
     `, [storeId, festivalName]);
-    
-    // Also get general strong relationships that might apply to festivals
-    const generalStrong = await pool.query(`
-        SELECT product_a, product_b, relationship_type, strength, occurrences
-        FROM product_relationships 
-        WHERE store_id = $1 
-            AND strength > 0.60
-            AND relationship_type IN ('frequently_together', 'complementary')
-        ORDER BY strength DESC
-    `, [storeId]);
-    
-    const festivalGuidance = [];
-    
-    // Seasonal relationships get priority
-    for (const rel of seasonalRelationships.rows) {
-        festivalGuidance.push({
-            productA: rel.product_a,
-            productB: rel.product_b,
-            urgency: daysUntilFestival <= 3 ? 'critical' : daysUntilFestival <= 7 ? 'high' : 'moderate',
-            reason: `${rel.product_a} and ${rel.product_b} are popular together during ${festivalName}`,
-            demandNote: `Stock both together - festival demand creates strong pairing`,
-            relationship: rel.relationship_type,
-            strength: rel.strength
-        });
-    }
-    
-    return festivalGuidance;
+
+    return rows.map(rel => ({
+        productA: rel.product_a,
+        productB: rel.product_b,
+        urgency: daysUntilFestival <= 3 ? 'critical' : daysUntilFestival <= 7 ? 'high' : 'moderate',
+        reason: `${rel.product_a} and ${rel.product_b} are frequently bought together during ${festivalName}`,
+        demandNote: `Learned from your shop's past ${festivalName} transactions`,
+        relationship: rel.relationship_type,
+        strength: rel.strength,
+    }));
 }
 
 // ── Utility Functions ──────────────────────────────────────────────────────

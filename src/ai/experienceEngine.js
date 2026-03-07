@@ -429,51 +429,47 @@ async function synthesizeFestivalGuidance(festival, festivalIntelligence, shopMe
     const festivalName = festival.name;
     const daysAway = festival.daysAway;
 
-    // Check if shop has historical seasonal purchase memory for this festival
-    const hasSeasonalMemory = festivalIntelligence && festivalIntelligence.length > 0;
+    // Always run AI synthesis — recommends freely regardless of what’s in stock
+    const { items: aiItems, suggestedNewItems } = await synthesizeFestivalFromStrengths(
+        shopMemory.strengthBased, festivalName, inventory
+    );
 
-    if (!hasSeasonalMemory) {
-        // No DB memory — ask AI to analyze inventory against festival context
-        const { items, suggestedNewItems } = await synthesizeFestivalFromStrengths(
-            shopMemory.strengthBased, festivalName, inventory
-        );
+    if (!aiItems.length && !suggestedNewItems.length) return null;
 
-        if (!items.length && !suggestedNewItems.length) return null;
+    // If the shop has actual festival-specific seasonal pair memory (real past transactions
+    // explicitly tagged with this festival name), merge those in as high-priority items.
+    const memoryItems = (festivalIntelligence || []).map(rel => ({
+        product: rel.productA,
+        urgency: rel.urgency,
+        reason: rel.reason,
+        action: `Proven seller during ${festivalName} — ensure you're well stocked`,
+        demand_note: rel.demandNote,
+        currentStock: inventory.find(
+            i => i.product.toLowerCase() === rel.productA.toLowerCase()
+        )?.quantity ?? 0,
+        classification: 'memory_validated',
+    }));
 
-        return {
-            type: 'festival_preparation',
-            event: festivalName,
-            summary: `${festivalName} is ${daysAway} days away — here’s what to prepare`,
-            strategy: 'ai_guided',
-            items,
-            suggestedNewItems,
-            experienceNote: 'AI-analyzed based on your live inventory and festival context',
-        };
-    }
+    // Deduplicate: memory items take precedence over AI items for the same product
+    const memoryProductKeys = new Set(memoryItems.map(i => i.product.toLowerCase()));
+    const dedupedAiItems = aiItems.filter(
+        i => !memoryProductKeys.has(i.product.toLowerCase())
+    );
 
-    // Has seasonal memory — use learned purchase history
     return {
-        type: 'festival_experience',
+        type: 'festival_preparation',
         event: festivalName,
-        summary: `${festivalName} is ${daysAway} days away — based on your shop’s past ${festivalName} experience`,
-        strategy: 'memory_guided',
-        items: festivalIntelligence.map(rel => ({
-            product: rel.productA,
-            companion: rel.productB,
-            urgency: rel.urgency,
-            demandNote: rel.demandNote,
-            experienceStrength: rel.strength,
-            classification: 'memory_validated',
-        })),
-        experienceNote: `Driven by your shop’s learned ${festivalName} purchase patterns`,
+        summary: `${festivalName} is ${daysAway} days away — here's what to prepare`,
+        strategy: memoryItems.length > 0 ? 'ai_and_memory' : 'ai_guided',
+        items: [...memoryItems, ...dedupedAiItems],
+        suggestedNewItems,
+        experienceNote: memoryItems.length > 0
+            ? `AI recommendations + your shop's learned ${festivalName} patterns`
+            : 'AI-analyzed based on festival traditions and your inventory',
     };
 }
 
-/**
- * Synthesize festival preparation guidance using AI — fully dynamic, no hardcoded festival data.
- * AI freely recommends everything relevant to the festival; we then classify each item as
- * "stock up" (already in inventory) or "source this" (not yet stocked).
- */
+
 async function synthesizeFestivalFromStrengths(strengthProducts, festivalName, inventory) {
     const inventoryList = inventory
         .map(i => `${i.product} (stock: ${i.quantity} ${i.unit || 'units'})`)
