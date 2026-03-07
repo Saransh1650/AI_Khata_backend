@@ -10,8 +10,8 @@
 const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
 const env = require('./env');
 
-// Amazon Nova Lite v2 — verify model ID in AWS Bedrock console if unavailable in your region
-const MODEL_ID = 'amazon.nova-lite-v2:0';
+// Amazon Nova Lite v1 — confirmed working model ID
+const MODEL_ID = 'amazon.nova-lite-v1:0';
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 2000;
 
