@@ -11,12 +11,11 @@ async function run() {
     try {
         await pool.query("UPDATE bills SET status='PROCESSING' WHERE id=$1", [billId]);
 
-        // Read image as base64
+        // Read image as buffer for Bedrock
         const imageBuffer = fs.readFileSync(imageUrl);
-        const base64 = imageBuffer.toString('base64');
         const mimeType = imageUrl.match(/\.(jpg|jpeg)$/i) ? 'image/jpeg' : 'image/png';
 
-        const imagePart = { inlineData: { mimeType, data: base64 } };
+        const imagePart = { bytes: imageBuffer, mimeType };
         const prompt = `Extract all information from this bill/receipt.
 Determine whether it is a purchase (money going OUT — you are buying goods) or a sale (money coming IN — you are selling goods).
 Return ONLY valid JSON with this exact structure:

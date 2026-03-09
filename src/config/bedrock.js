@@ -43,7 +43,7 @@ async function callBedrock(prompt, imagePart = null) {
         content.push({
             image: {
                 format,
-                source: { bytes: imagePart.bytes },
+                source: { bytes: new Uint8Array(imagePart.bytes) },
             },
         });
     }
