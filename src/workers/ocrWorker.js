@@ -23,13 +23,13 @@ Return ONLY valid JSON with this exact structure:
   "merchant": "store name or null",
   "date": "YYYY-MM-DD or null",
   "total": 0.00,
-  "transactionType": "expense",
+  "transactionType": "income",
   "lineItems": [
     { "name": "product name", "qty": 1, "unitPrice": 0.00, "unit": "units", "total": 0.00 }
   ]
 }
 Rules:
-- transactionType must be exactly "expense" (purchase/you paid) or "income" (sale/you received money). Default to "expense" if unclear.
+- transactionType must be exactly "income" (sale/you received money) or "expense" (purchase/you paid). Default to "income" if unclear.
 - unit should be the item's unit of measure (kg, pcs, L, dozen, etc.). Use "units" if not specified.
 - Do not include any text outside the JSON.`;
 
@@ -45,7 +45,7 @@ Rules:
             const txDate = extracted.date ? new Date(extracted.date) : new Date();
             const txType = ['income', 'expense'].includes(extracted.transactionType)
                 ? extracted.transactionType
-                : 'expense';
+                : 'income';
 
             const { rows: [entry] } = await client.query(
                 `INSERT INTO ledger_entries(user_id,store_id,bill_id,merchant,transaction_date,total_amount,transaction_type)
